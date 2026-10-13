@@ -114,7 +114,7 @@
   <script>
     const FORA_APP_ORIGIN = "https://qa2.advisor.forastaging.net";
     const FORA_API_BASE = "https://qa2.api.forastaging.net";
-    const ADVISOR_SLUG = "mark";
+    const ADVISOR_SLUG = new URLSearchParams(location.search).get("advisor") || "mark";
     const TOKEN_KEY = "fora_traveler_token";
 
     const loginEl = document.getElementById("login");
@@ -125,7 +125,7 @@
     const frame = document.getElementById("fora-login");
 
     function showLogin() {
-      frame.src = `${FORA_APP_ORIGIN}/client-portal/${ADVISOR_SLUG}/embed/login`;
+      frame.src = `${FORA_APP_ORIGIN}/client-portal/${encodeURIComponent(ADVISOR_SLUG)}/embed/login`;
       searchEl.hidden = true;
       loginEl.hidden = false;
     }
