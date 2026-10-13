@@ -23,7 +23,9 @@
     a { color: inherit; }
     .wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
 
-    nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
+    .site-header { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line); }
+    nav { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; }
+    .book { scroll-margin-top: 72px; }
     .logo { font-family: Fraunces, Georgia, serif; font-size: 22px; font-weight: 600; }
     .logo span { color: var(--accent); }
     nav a.cta { text-decoration: none; background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 999px; font-size: 14px; font-weight: 500; }
@@ -77,11 +79,16 @@
   </style>
 </head>
 <body>
+  <header class="site-header">
+    <div class="wrap">
+      <nav>
+        <div class="logo">Homebody <span>Travels</span></div>
+        <a class="cta" id="nav-cta" href="#book">Client sign in</a>
+      </nav>
+    </div>
+  </header>
+
   <div class="wrap">
-    <nav>
-      <div class="logo">Homebody <span>Travels</span></div>
-      <a class="cta" href="#book">Client sign in</a>
-    </nav>
 
     <section class="hero">
       <div>
@@ -109,7 +116,7 @@
 
       <div id="search" hidden>
         <h2>Find your next stay</h2>
-        <p class="lede">You're signed in. <button id="signout" class="signout" type="button">Sign out</button></p>
+        <p class="lede"><span id="greeting">You're signed in.</span> <button id="signout" class="signout" type="button">Sign out</button></p>
         <form id="search-form" class="search-bar">
           <input id="query" placeholder="Where to? e.g. Lisbon" required>
           <button id="search-button" type="submit">Search</button>
@@ -193,8 +200,40 @@
     const searchButton = document.getElementById("search-button");
     const frame = document.getElementById("fora-login");
 
-    function showLogin() {
-      frame.src = `${FORA_APP_ORIGIN}/client-portal/${encodeURIComponent(ADVISOR_SLUG)}/embed/login`;
+    const greetingEl = document.getElementById("greeting");
+    const navCta = document.getElementById("nav-cta");
+
+    function decodeTokenPayload(token) {
+      try {
+        return JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+      } catch {
+        return null;
+      }
+    }
+
+    async function loadTravelerName() {
+      const token = sessionStorage.getItem(TOKEN_KEY);
+      const clientId = token ? decodeTokenPayload(token)?.client_id : null;
+      if (!clientId) return;
+      try {
+        const response = await fetch(`${FORA_API_BASE}/client/v1/client/${encodeURIComponent(clientId)}/`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!response.ok) return;
+        const client = await response.json();
+        const name = client.preferred_name || client.first_name;
+        if (!name) return;
+        greetingEl.textContent = `Welcome back, ${name}.`;
+        navCta.textContent = `Hi, ${name}`;
+      } catch {
+        return;
+      }
+    }
+
+    function showLogin({ signOut = false } = {}) {
+      frame.src = `${FORA_APP_ORIGIN}/client-portal/${encodeURIComponent(ADVISOR_SLUG)}/embed/login${signOut ? "?signout=1" : ""}`;
+      greetingEl.textContent = "You're signed in.";
+      navCta.textContent = "Client sign in";
       searchEl.hidden = true;
       loginEl.hidden = false;
     }
@@ -202,6 +241,7 @@
     function showSearch() {
       loginEl.hidden = true;
       searchEl.hidden = false;
+      loadTravelerName();
     }
 
     sessionStorage.getItem(TOKEN_KEY) ? showSearch() : showLogin();
@@ -217,7 +257,7 @@
       sessionStorage.removeItem(TOKEN_KEY);
       resultsEl.innerHTML = "";
       statusEl.textContent = "";
-      showLogin();
+      showLogin({ signOut: true });
     });
 
     document.getElementById("search-form").addEventListener("submit", async event => {
