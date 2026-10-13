@@ -50,8 +50,19 @@
     .search-bar button:disabled { opacity: 0.6; cursor: progress; }
     .status { color: var(--muted); min-height: 1.6em; }
     .status.error { color: #b3261e; }
-    .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; padding: 0; margin: 16px 0 0; list-style: none; }
-    .results li { border: 1px solid var(--line); border-radius: 14px; padding: 16px; background: var(--bg); font-weight: 500; }
+    .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px; padding: 0; margin: 16px 0 0; list-style: none; }
+    .card { border: 1px solid var(--line); border-radius: 16px; background: var(--bg); overflow: hidden; display: flex; flex-direction: column; }
+    .card-media { position: relative; aspect-ratio: 3 / 2; background: var(--line); }
+    .card-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .card-badge { position: absolute; top: 12px; left: 12px; background: var(--surface); color: var(--ink); font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; }
+    .card-body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+    .card-title { font-family: Fraunces, Georgia, serif; font-size: 18px; font-weight: 600; line-height: 1.25; margin: 0; }
+    .card-stars { color: var(--accent); font-size: 13px; letter-spacing: 1px; }
+    .card-meta { color: var(--muted); font-size: 14px; }
+    .card-rating { font-size: 14px; font-weight: 500; }
+    .card-rating span { color: var(--muted); font-weight: 400; }
+    .card-programs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 10px; }
+    .card-programs img { height: 22px; width: auto; object-fit: contain; }
     .signout { background: none; border: 0; color: var(--muted); text-decoration: underline; cursor: pointer; font: inherit; padding: 0; }
 
     footer { padding: 32px 0; color: var(--muted); font-size: 14px; }
@@ -116,6 +127,64 @@
     const FORA_API_BASE = "https://qa2.api.forastaging.net";
     const ADVISOR_SLUG = new URLSearchParams(location.search).get("advisor") || "mark";
     const TOKEN_KEY = "fora_traveler_token";
+    const CLOUDINARY_BASE = "https://res.cloudinary.com/foratravelstaging/image/upload/f_auto,q_auto,c_fill,w_640,h_427";
+
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    }
+
+    function renderSupplierCard(supplier) {
+      const card = el("li", "card");
+
+      const media = el("div", "card-media");
+      const publicId = supplier.images?.[0]?.public_id;
+      if (publicId) {
+        const img = el("img");
+        img.src = `${CLOUDINARY_BASE}/${encodeURIComponent(publicId)}`;
+        img.alt = supplier.name ?? "";
+        img.loading = "lazy";
+        img.onerror = () => img.remove();
+        media.appendChild(img);
+      }
+      const badge = supplier.labels?.[0]?.text;
+      if (badge) media.appendChild(el("span", "card-badge", badge));
+      card.appendChild(media);
+
+      const body = el("div", "card-body");
+      body.appendChild(el("h3", "card-title", supplier.name ?? "Unnamed hotel"));
+
+      const stars = Number.parseInt(supplier.hotel_class, 10);
+      if (stars > 0) body.appendChild(el("div", "card-stars", "★".repeat(Math.min(stars, 5))));
+
+      const place = [supplier.neighborhood, supplier.location].filter(Boolean).join(" · ");
+      if (place) body.appendChild(el("div", "card-meta", place));
+
+      if (supplier.total_review_count > 0 && supplier.average_review_rating) {
+        const rating = el("div", "card-rating", `★ ${supplier.average_review_rating.toFixed(1)} `);
+        rating.appendChild(el("span", null, `(${supplier.total_review_count} reviews)`));
+        body.appendChild(rating);
+      }
+
+      const programs = (supplier.programs ?? []).filter(program => program.logo_url);
+      if (programs.length) {
+        const row = el("div", "card-programs");
+        for (const program of programs) {
+          const logo = el("img");
+          logo.src = program.logo_url;
+          logo.alt = program.name;
+          logo.title = program.name;
+          logo.loading = "lazy";
+          row.appendChild(logo);
+        }
+        body.appendChild(row);
+      }
+
+      card.appendChild(body);
+      return card;
+    }
 
     const loginEl = document.getElementById("login");
     const searchEl = document.getElementById("search");
@@ -173,11 +242,7 @@
         const data = await response.json();
         const results = data.results ?? [];
         statusEl.textContent = results.length ? `${data.count ?? results.length} hotels found` : "No hotels found. Try another destination.";
-        for (const supplier of results) {
-          const li = document.createElement("li");
-          li.textContent = supplier.name ?? supplier.title ?? supplier.id;
-          resultsEl.appendChild(li);
-        }
+        for (const supplier of results) resultsEl.appendChild(renderSupplierCard(supplier));
       } catch (error) {
         statusEl.className = "status error";
         statusEl.textContent = error.message;
