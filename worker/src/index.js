@@ -71,9 +71,9 @@ function parseSignup(body) {
   if (firstName.length > MAX_NAME_LENGTH || lastName.length > MAX_NAME_LENGTH) {
     return { error: "Name is too long." };
   }
-  if (!email && !phone) return { error: "An email or phone number is required to sign in." };
-  if (email && !EMAIL_PATTERN.test(email)) return { error: "Email looks invalid." };
-  if (phone && !PHONE_PATTERN.test(phone)) return { error: "Phone number looks invalid." };
+  if (!email || !phone) return { error: "Email and phone number are required." };
+  if (!EMAIL_PATTERN.test(email)) return { error: "Email looks invalid." };
+  if (!PHONE_PATTERN.test(phone)) return { error: "Phone number looks invalid." };
 
   return { signup: { firstName, lastName, email, phone } };
 }
