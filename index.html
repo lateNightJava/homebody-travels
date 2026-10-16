@@ -65,7 +65,25 @@
     .card-rating span { color: var(--muted); font-weight: 400; }
     .card-programs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 10px; }
     .card-programs img { height: 22px; width: auto; object-fit: contain; }
-    .card-book { margin-top: 12px; align-self: flex-start; text-decoration: none; background: var(--accent); color: var(--accent-ink); padding: 8px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; }
+    .card-book { margin-top: 12px; align-self: flex-start; text-decoration: none; background: var(--accent); color: var(--accent-ink); padding: 8px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; border: 0; cursor: pointer; font-family: inherit; }
+    .search-bar select { padding: 12px 14px; font: inherit; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+    .search-bar input[type="date"] { flex: 0 0 auto; }
+
+    .rooms { margin-top: 24px; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); scroll-margin-top: 80px; }
+    .rooms h3 { font-family: Fraunces, Georgia, serif; font-size: 22px; margin: 0 0 4px; }
+    .room { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .room:last-child { border-bottom: 0; }
+    .room-name { font-weight: 600; }
+    .room-meta { color: var(--muted); font-size: 14px; }
+    .room-side { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+    .room-price { font-weight: 600; }
+    .room .card-book { margin-top: 0; }
+    .confirmation { margin-top: 16px; padding: 16px; border-radius: 14px; background: #eef5ec; font-weight: 500; }
+
+    .checkout-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(43, 36, 32, 0.45); display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; overflow-y: auto; }
+    .checkout-modal { width: 100%; max-width: 520px; background: var(--surface); border-radius: 18px; padding: 8px; }
+    .checkout-modal header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; }
+    .checkout-frame { display: block; width: 100%; height: 520px; border: 0; }
 
     .signup { max-width: 520px; margin-bottom: 32px; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); }
     .signup h3 { margin: 0 0 4px; font-size: 18px; }
@@ -86,6 +104,7 @@
       .hero img { aspect-ratio: 16 / 10; }
       .pillars { grid-template-columns: 1fr; }
       .search-bar { flex-direction: column; }
+      .room { flex-direction: column; align-items: flex-start; }
       .signup-grid { grid-template-columns: 1fr; }
     }
   </style>
@@ -146,13 +165,34 @@
         <p class="lede"><span id="greeting">You're signed in.</span> <button id="signout" class="signout" type="button">Sign out</button></p>
         <form id="search-form" class="search-bar">
           <input id="query" placeholder="Where to? e.g. Lisbon" required>
+          <input id="check-in" type="date" aria-label="Check-in" required>
+          <input id="check-out" type="date" aria-label="Check-out" required>
+          <select id="adults" aria-label="Guests">
+            <option value="1">1 guest</option>
+            <option value="2" selected>2 guests</option>
+            <option value="3">3 guests</option>
+            <option value="4">4 guests</option>
+          </select>
           <button id="search-button" type="submit">Search</button>
         </form>
         <p id="status" class="status"></p>
+        <p id="confirmation" class="confirmation" hidden></p>
         <ul id="results" class="results"></ul>
+        <section id="rooms" class="rooms" hidden>
+          <h3 id="rooms-title"></h3>
+          <p id="rooms-status" class="status"></p>
+          <div id="rooms-list"></div>
+        </section>
       </div>
     </div>
   </section>
+
+  <div id="checkout-overlay" class="checkout-overlay" hidden>
+    <div class="checkout-modal" role="dialog" aria-modal="true" aria-label="Checkout">
+      <header><strong>Checkout</strong><button id="checkout-close" class="signout" type="button">Close</button></header>
+      <iframe id="checkout-frame" class="checkout-frame" title="Checkout"></iframe>
+    </div>
+  </div>
 
   <footer class="wrap">© Homebody Travels · Demo site</footer>
 
@@ -218,10 +258,9 @@
       }
 
       if (supplier.id && supplier.is_bookable !== false) {
-        const book = el("a", "card-book", "Book with Homebody");
-        book.href = `${FORA_APP_ORIGIN}/client-portal/${encodeURIComponent(ADVISOR_SLUG)}/book/hotels/${encodeURIComponent(supplier.id)}`;
-        book.target = "_blank";
-        book.rel = "noopener";
+        const book = el("button", "card-book", "See rooms");
+        book.type = "button";
+        book.addEventListener("click", () => loadRooms(supplier));
         body.appendChild(book);
       }
 
@@ -238,6 +277,118 @@
 
     const greetingEl = document.getElementById("greeting");
     const navCta = document.getElementById("nav-cta");
+
+    const checkInEl = document.getElementById("check-in");
+    const checkOutEl = document.getElementById("check-out");
+    const adultsEl = document.getElementById("adults");
+    const roomsEl = document.getElementById("rooms");
+    const roomsTitle = document.getElementById("rooms-title");
+    const roomsStatus = document.getElementById("rooms-status");
+    const roomsList = document.getElementById("rooms-list");
+    const confirmationEl = document.getElementById("confirmation");
+    const checkoutOverlay = document.getElementById("checkout-overlay");
+    const checkoutFrame = document.getElementById("checkout-frame");
+    const CHECKOUT_THEME = { accent: "c2603a", radius: "14", font: "serif" };
+
+    function isoDate(daysFromToday) {
+      const date = new Date();
+      date.setDate(date.getDate() + daysFromToday);
+      return date.toISOString().slice(0, 10);
+    }
+    checkInEl.value = isoDate(30);
+    checkOutEl.value = isoDate(32);
+
+    function formatMoney(amount, currency) {
+      return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
+    }
+
+    function collectRates(data) {
+      const roomRates = (data.rooms ?? []).flatMap(room => room.rates ?? []);
+      const programRates = (data.programs ?? []).flatMap(program =>
+        (program.rates ?? []).map(rate => ({ ...rate, program: rate.program ?? { id: program.id, name: program.name } }))
+      );
+      return (roomRates.length ? roomRates : programRates).filter(rate => rate.price && !rate.is_book_with_advisor);
+    }
+
+    async function loadRooms(supplier) {
+      const search = { start: checkInEl.value, end: checkOutEl.value, adults: Number(adultsEl.value) };
+      confirmationEl.hidden = true;
+      roomsEl.hidden = false;
+      roomsTitle.textContent = supplier.name ?? "Rooms";
+      roomsStatus.className = "status";
+      roomsStatus.textContent = "Checking live rates…";
+      roomsList.innerHTML = "";
+      roomsEl.scrollIntoView({ behavior: "smooth", block: "start" });
+
+      try {
+        const response = await fetch(`${FORA_API_BASE}/v2/supplier-database/suppliers/${encodeURIComponent(supplier.id)}/rates/`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY)}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            supplier_id: supplier.id,
+            start_date: search.start,
+            end_date: search.end,
+            number_of_adults: search.adults,
+            children_ages: [],
+            currency: "USD"
+          })
+        });
+        if (!response.ok) throw new Error(`Couldn't load rooms (${response.status}).`);
+        const data = await response.json();
+        const rates = collectRates(data);
+        roomsStatus.textContent = rates.length ? `${rates.length} rates · ${search.start} → ${search.end}` : "No bookable rooms for these dates.";
+        for (const rate of rates) roomsList.appendChild(renderRate(rate, data.cart_id, supplier, search));
+      } catch (error) {
+        roomsStatus.className = "status error";
+        roomsStatus.textContent = error.message;
+      }
+    }
+
+    function renderRate(rate, cartId, supplier, search) {
+      const grandTotal = rate.price.grand_total_items.find(item => item.category === "grand_total");
+      const isRefundable = rate.policies?.cancellations?.some(policy => policy.refundable);
+      const row = el("div", "room");
+
+      const info = el("div");
+      info.appendChild(el("div", "room-name", rate.room?.description || rate.room?.name || "Room"));
+      info.appendChild(el("div", "room-meta", [rate.program?.client_facing_name || rate.program?.name, isRefundable ? "Refundable" : "Non-refundable"].filter(Boolean).join(" · ")));
+      row.appendChild(info);
+
+      const side = el("div", "room-side");
+      if (grandTotal) side.appendChild(el("span", "room-price", formatMoney(grandTotal.total, grandTotal.currency)));
+      const book = el("button", "card-book", "Book");
+      book.type = "button";
+      book.disabled = !grandTotal || !cartId;
+      book.addEventListener("click", () => openCheckout({
+        cart: cartId,
+        rate: rate.id,
+        package: String(rate.is_package_rate),
+        program: rate.program.id,
+        amount: String(grandTotal.original_total),
+        currency: grandTotal.original_currency,
+        supplier: supplier.id,
+        start: search.start,
+        end: search.end,
+        adults: String(search.adults),
+        ...CHECKOUT_THEME
+      }));
+      side.appendChild(book);
+      row.appendChild(side);
+      return row;
+    }
+
+    function openCheckout(params) {
+      checkoutFrame.style.height = "520px";
+      checkoutFrame.src = `${FORA_APP_ORIGIN}/client-portal/${encodeURIComponent(ADVISOR_SLUG)}/embed/checkout?${new URLSearchParams(params)}`;
+      checkoutOverlay.hidden = false;
+    }
+
+    function closeCheckout() {
+      checkoutOverlay.hidden = true;
+      checkoutFrame.src = "about:blank";
+    }
+
+    document.getElementById("checkout-close").addEventListener("click", closeCheckout);
 
     function decodeTokenPayload(token) {
       try {
@@ -284,15 +435,31 @@
 
     window.addEventListener("message", event => {
       if (event.origin !== FORA_APP_ORIGIN) return;
-      if (event.data?.type !== "fora:traveler-login" || !event.data.token) return;
-      sessionStorage.setItem(TOKEN_KEY, event.data.token);
-      showSearch();
+      const message = event.data ?? {};
+
+      if (message.type === "fora:traveler-login" && message.token) {
+        sessionStorage.setItem(TOKEN_KEY, message.token);
+        showSearch();
+      } else if (message.type === "fora:resize" && event.source === checkoutFrame.contentWindow) {
+        const height = Number(message.height);
+        if (height > 0) checkoutFrame.style.height = `${Math.min(height, 2000)}px`;
+      } else if (message.type === "fora:booking-result" && event.source === checkoutFrame.contentWindow) {
+        closeCheckout();
+        roomsEl.hidden = true;
+        confirmationEl.hidden = false;
+        confirmationEl.textContent = message.status === "pending"
+          ? "Your booking is submitted. We'll email you once the hotel confirms."
+          : `You're booked! Confirmation ${message.bookingId ?? ""} is on its way to your inbox.`;
+        confirmationEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
     });
 
     document.getElementById("signout").addEventListener("click", () => {
       sessionStorage.removeItem(TOKEN_KEY);
       resultsEl.innerHTML = "";
       statusEl.textContent = "";
+      roomsEl.hidden = true;
+      confirmationEl.hidden = true;
       showLogin({ signOut: true });
     });
 
@@ -336,6 +503,8 @@
       statusEl.className = "status";
       statusEl.textContent = "Searching…";
       resultsEl.innerHTML = "";
+      roomsEl.hidden = true;
+      confirmationEl.hidden = true;
 
       try {
         const response = await fetch(`${FORA_API_BASE}/v1/supplier-database/suppliers/?${params}`, {
