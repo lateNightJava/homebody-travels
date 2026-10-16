@@ -78,12 +78,19 @@
     .room-side { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
     .room-price { font-weight: 600; }
     .room .card-book { margin-top: 0; }
-    .confirmation { margin-top: 16px; padding: 16px; border-radius: 14px; background: #eef5ec; font-weight: 500; }
 
     .checkout-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(43, 36, 32, 0.45); display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; overflow-y: auto; }
     .checkout-modal { width: 100%; max-width: 520px; background: var(--surface); border-radius: 18px; padding: 8px; }
     .checkout-modal header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; }
     .checkout-frame { display: block; width: 100%; height: 520px; border: 0; }
+    .booked { padding: 12px 20px 20px; text-align: center; }
+    .booked-mark { width: 56px; height: 56px; margin: 4px auto 12px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-size: 28px; }
+    .booked h3 { font-family: Fraunces, Georgia, serif; font-size: 26px; margin: 0 0 4px; }
+    .booked-details { margin: 20px 0; padding: 0; border-top: 1px solid var(--line); text-align: left; }
+    .booked-details div { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .booked-details dt { color: var(--muted); }
+    .booked-details dd { margin: 0; font-weight: 600; text-align: right; }
+    .booked .card-book { margin: 0 auto; }
 
     .signup { max-width: 520px; margin-bottom: 32px; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); }
     .signup h3 { margin: 0 0 4px; font-size: 18px; }
@@ -148,7 +155,7 @@
               <input name="first_name" placeholder="First name" autocomplete="given-name" required>
               <input name="last_name" placeholder="Last name" autocomplete="family-name" required>
               <input name="phone" type="tel" placeholder="Mobile phone" autocomplete="tel" required>
-              <input name="email" type="email" placeholder="Email (optional)" autocomplete="email">
+              <input name="email" type="email" placeholder="Email" autocomplete="email" required>
             </div>
             <button id="signup-button" type="submit">Create account</button>
             <p id="signup-status" class="signup-status"></p>
@@ -176,7 +183,6 @@
           <button id="search-button" type="submit">Search</button>
         </form>
         <p id="status" class="status"></p>
-        <p id="confirmation" class="confirmation" hidden></p>
         <ul id="results" class="results"></ul>
         <section id="rooms" class="rooms" hidden>
           <h3 id="rooms-title"></h3>
@@ -189,8 +195,15 @@
 
   <div id="checkout-overlay" class="checkout-overlay" hidden>
     <div class="checkout-modal" role="dialog" aria-modal="true" aria-label="Checkout">
-      <header><strong>Checkout</strong><button id="checkout-close" class="signout" type="button">Close</button></header>
+      <header><strong id="checkout-heading">Checkout</strong><button id="checkout-close" class="signout" type="button">Close</button></header>
       <iframe id="checkout-frame" class="checkout-frame" title="Checkout"></iframe>
+      <div id="booked" class="booked" hidden>
+        <div class="booked-mark" aria-hidden="true">✓</div>
+        <h3 id="booked-title"></h3>
+        <p id="booked-lede" class="lede"></p>
+        <dl id="booked-details" class="booked-details"></dl>
+        <button id="booked-done" class="card-book" type="button">Done</button>
+      </div>
     </div>
   </div>
 
@@ -285,7 +298,11 @@
     const roomsTitle = document.getElementById("rooms-title");
     const roomsStatus = document.getElementById("rooms-status");
     const roomsList = document.getElementById("rooms-list");
-    const confirmationEl = document.getElementById("confirmation");
+    const checkoutHeading = document.getElementById("checkout-heading");
+    const bookedEl = document.getElementById("booked");
+    const bookedTitle = document.getElementById("booked-title");
+    const bookedLede = document.getElementById("booked-lede");
+    const bookedDetails = document.getElementById("booked-details");
     const checkoutOverlay = document.getElementById("checkout-overlay");
     const checkoutFrame = document.getElementById("checkout-frame");
     const CHECKOUT_THEME = { accent: "c2603a", radius: "14", font: "serif" };
@@ -312,7 +329,6 @@
 
     async function loadRooms(supplier) {
       const search = { start: checkInEl.value, end: checkOutEl.value, adults: Number(adultsEl.value) };
-      confirmationEl.hidden = true;
       roomsEl.hidden = false;
       roomsTitle.textContent = supplier.name ?? "Rooms";
       roomsStatus.className = "status";
@@ -360,6 +376,14 @@
       book.type = "button";
       book.disabled = !grandTotal || !cartId;
       book.addEventListener("click", () => openCheckout({
+        hotel: supplier.name ?? "Your hotel",
+        room: rate.room?.description || rate.room?.name || "Room",
+        start: search.start,
+        end: search.end,
+        adults: search.adults,
+        total: formatMoney(grandTotal.total, grandTotal.currency),
+        refundable: isRefundable
+      }, {
         cart: cartId,
         rate: rate.id,
         package: String(rate.is_package_rate),
@@ -377,7 +401,13 @@
       return row;
     }
 
-    function openCheckout(params) {
+    let pendingBooking = null;
+
+    function openCheckout(details, params) {
+      pendingBooking = details;
+      checkoutHeading.textContent = "Checkout";
+      bookedEl.hidden = true;
+      checkoutFrame.hidden = false;
       checkoutFrame.style.height = "520px";
       checkoutFrame.src = `${FORA_APP_ORIGIN}/client-portal/${encodeURIComponent(ADVISOR_SLUG)}/embed/checkout?${new URLSearchParams(params)}`;
       checkoutOverlay.hidden = false;
@@ -386,9 +416,51 @@
     function closeCheckout() {
       checkoutOverlay.hidden = true;
       checkoutFrame.src = "about:blank";
+      pendingBooking = null;
+    }
+
+    function formatStayDates(start, end) {
+      const format = date => new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      const nights = Math.round((new Date(end) - new Date(start)) / 86400000);
+      return `${format(start)} – ${format(end)} (${nights} night${nights === 1 ? "" : "s"})`;
+    }
+
+    function showBooked(result) {
+      const details = pendingBooking ?? {};
+      const isPending = result.status === "pending";
+      checkoutHeading.textContent = "Booking confirmed";
+      checkoutFrame.hidden = true;
+      checkoutFrame.src = "about:blank";
+      bookedTitle.textContent = isPending ? "Booking submitted" : "You're booked!";
+      bookedLede.textContent = isPending
+        ? `${details.hotel} is confirming your stay. We'll email you as soon as it's final.`
+        : `Pack your bags — ${details.hotel} is expecting you. A confirmation is on its way to your inbox.`;
+
+      const rows = [
+        ["Hotel", details.hotel],
+        ["Room", details.room],
+        ["Dates", details.start && details.end ? formatStayDates(details.start, details.end) : null],
+        ["Guests", details.adults ? `${details.adults} adult${details.adults === 1 ? "" : "s"}` : null],
+        ["Total", details.total],
+        ["Cancellation", details.refundable === undefined ? null : details.refundable ? "Refundable" : "Non-refundable"],
+        ["Confirmation", result.confirmationNumber || null],
+        ["Booking ref", result.bookingId || null],
+        ["Status", result.status ? result.status.replace(/_/g, " ") : null]
+      ];
+      bookedDetails.innerHTML = "";
+      for (const [label, value] of rows) {
+        if (!value) continue;
+        const row = el("div");
+        row.appendChild(el("dt", null, label));
+        row.appendChild(el("dd", null, String(value)));
+        bookedDetails.appendChild(row);
+      }
+      bookedEl.hidden = false;
+      roomsEl.hidden = true;
     }
 
     document.getElementById("checkout-close").addEventListener("click", closeCheckout);
+    document.getElementById("booked-done").addEventListener("click", closeCheckout);
 
     function decodeTokenPayload(token) {
       try {
@@ -444,13 +516,7 @@
         const height = Number(message.height);
         if (height > 0) checkoutFrame.style.height = `${Math.min(height, 2000)}px`;
       } else if (message.type === "fora:booking-result" && event.source === checkoutFrame.contentWindow) {
-        closeCheckout();
-        roomsEl.hidden = true;
-        confirmationEl.hidden = false;
-        confirmationEl.textContent = message.status === "pending"
-          ? "Your booking is submitted. We'll email you once the hotel confirms."
-          : `You're booked! Confirmation ${message.bookingId ?? ""} is on its way to your inbox.`;
-        confirmationEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        showBooked(message);
       }
     });
 
@@ -459,7 +525,6 @@
       resultsEl.innerHTML = "";
       statusEl.textContent = "";
       roomsEl.hidden = true;
-      confirmationEl.hidden = true;
       showLogin({ signOut: true });
     });
 
@@ -504,7 +569,6 @@
       statusEl.textContent = "Searching…";
       resultsEl.innerHTML = "";
       roomsEl.hidden = true;
-      confirmationEl.hidden = true;
 
       try {
         const response = await fetch(`${FORA_API_BASE}/v1/supplier-database/suppliers/?${params}`, {
