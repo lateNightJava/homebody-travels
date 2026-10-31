@@ -1,7 +1,15 @@
+import { SignJWT, importPKCS8 } from "jose";
+
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_PATTERN = /^\+?[0-9 ()-]{7,20}$/;
 const MAX_NAME_LENGTH = 128;
 const USER_KEY_PREFIX = "user:";
+
+const CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+const ASSERTION_AUDIENCE = "fora:app-token";
+const TOKEN_KEY = "fora:app_token";
+const TOKEN_REFRESH_MARGIN_MS = 60_000;
+const KV_MIN_TTL_SECONDS = 60;
 
 function corsHeaders(env) {
   return {
@@ -17,6 +25,49 @@ function json(body, status, env) {
     status,
     headers: { "Content-Type": "application/json", ...corsHeaders(env) }
   });
+}
+
+async function requestForaToken(env) {
+  const privateKey = await importPKCS8(env.FORA_PRIVATE_KEY, "ES256");
+  const assertion = await new SignJWT({})
+    .setProtectedHeader({ alg: "ES256", kid: env.FORA_KID })
+    .setIssuer(env.FORA_CLIENT_ID)
+    .setSubject(env.FORA_CLIENT_ID)
+    .setAudience(ASSERTION_AUDIENCE)
+    .setIssuedAt()
+    .setExpirationTime("60s")
+    .setJti(crypto.randomUUID())
+    .sign(privateKey);
+
+  const response = await fetch(`${env.FORA_API_BASE}/v1/auth/app-token/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_assertion_type: CLIENT_ASSERTION_TYPE,
+      client_assertion: assertion
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Fora token request failed (${response.status}): ${await response.text()}`);
+  }
+
+  const data = await response.json();
+  return { access_token: data.access_token, expires_at: Date.now() + data.expires_in * 1000 };
+}
+
+async function getForaToken(env) {
+  const cached = await env.USERS.get(TOKEN_KEY, "json");
+  if (cached && cached.expires_at - TOKEN_REFRESH_MARGIN_MS > Date.now()) {
+    return { ...cached, from_cache: true };
+  }
+
+  const token = await requestForaToken(env);
+  const secondsLeft = Math.floor((token.expires_at - Date.now()) / 1000);
+  await env.USERS.put(TOKEN_KEY, JSON.stringify(token), {
+    expirationTtl: Math.max(secondsLeft, KV_MIN_TTL_SECONDS)
+  });
+  return { ...token, from_cache: false };
 }
 
 function parseSignup(body) {
@@ -74,6 +125,20 @@ export default {
 
     if (request.method === "GET" && pathname === "/users") {
       return json({ users: await listUsers(env) }, 200, env);
+    }
+
+    if (request.method === "GET" && pathname === "/fora/token-status") {
+      try {
+        const token = await getForaToken(env);
+        return json(
+          { from_cache: token.from_cache, expires_at: new Date(token.expires_at).toISOString() },
+          200,
+          env
+        );
+      } catch (err) {
+        console.error(err);
+        return json({ error: "Could not get a Fora token." }, 502, env);
+      }
     }
 
     if (request.method === "POST" && pathname === "/signup") {
