@@ -70,6 +70,26 @@ async function getForaToken(env) {
   return { ...token, from_cache: false };
 }
 
+async function createForaClient(env, { firstName, lastName, email, phone }) {
+  const { access_token } = await getForaToken(env);
+  const response = await fetch(`${env.FORA_API_BASE}/published/clients/`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      first_name: firstName,
+      last_name: lastName,
+      emails: [{ email, email_type: "personal" }],
+      phone_numbers: [{ phone_number: phone, number_type: "mobile" }]
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Fora client create failed (${response.status}): ${await response.text()}`);
+  }
+
+  const client = await response.json();
+  return client.id;
+}
+
 function parseSignup(body) {
   const field = name => (typeof body?.[name] === "string" ? body[name].trim() : "");
   const firstName = field("first_name");
@@ -88,14 +108,14 @@ function parseSignup(body) {
   return { signup: { firstName, lastName, email, phone } };
 }
 
-async function createUser(env, { firstName, lastName, email, phone }) {
+async function createUser(env, { firstName, lastName, email, phone }, foraClientId) {
   const user = {
     id: crypto.randomUUID(),
     first_name: firstName,
     last_name: lastName,
     email,
     phone,
-    fora_client_id: null
+    fora_client_id: foraClientId
   };
   await env.USERS.put(`${USER_KEY_PREFIX}${user.id}`, JSON.stringify(user), {
     metadata: { first_name: firstName, last_name: lastName }
@@ -144,7 +164,15 @@ export default {
     if (request.method === "POST" && pathname === "/signup") {
       const { signup, error } = parseSignup(await request.json().catch(() => null));
       if (error) return json({ error }, 400, env);
-      return json(await createUser(env, signup), 201, env);
+
+      let foraClientId;
+      try {
+        foraClientId = await createForaClient(env, signup);
+      } catch (err) {
+        console.error(err);
+        return json({ error: "Could not create your Fora profile." }, 502, env);
+      }
+      return json(await createUser(env, signup, foraClientId), 201, env);
     }
 
     return json({ error: "Not found." }, 404, env);
