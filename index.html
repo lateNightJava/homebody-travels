@@ -44,7 +44,6 @@
     .book { background: var(--surface); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 64px 0; }
     .book h2 { font-size: 34px; }
     .book .lede { color: var(--muted); margin: 0 0 24px; }
-    .login-frame { width: 100%; max-width: 520px; height: 560px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); }
 
     .search-bar { display: flex; gap: 10px; max-width: 560px; margin-bottom: 12px; }
     .search-bar input { flex: 1; padding: 12px 14px; font: inherit; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
@@ -149,7 +148,7 @@
       <div id="login">
         <div class="signup">
           <h3>New here? Create your account</h3>
-          <p>We'll set you up with Homebody Travels, then you can sign in below with a one-time code.</p>
+          <p>We'll set you up with Homebody Travels, then you can log in below.</p>
           <form id="signup-form">
             <div class="signup-grid">
               <input name="first_name" placeholder="First name" autocomplete="given-name" required>
@@ -162,9 +161,19 @@
           </form>
         </div>
 
-        <h2>Sign in to browse hotels</h2>
-        <p class="lede">Use the email or phone number you've shared with us. We'll send you a one-time code.</p>
-        <iframe id="fora-login" class="login-frame" title="Sign in"></iframe>
+        <h2>Log in to browse hotels</h2>
+        <form id="login-form" class="search-bar">
+          <select id="login-user" aria-label="Log in as" required>
+            <option value="">Loading travelers…</option>
+          </select>
+          <button id="login-button" type="submit">Log in</button>
+        </form>
+        <p id="login-status" class="status"></p>
+      </div>
+
+      <div id="account" hidden>
+        <h2 id="account-greeting">Welcome back.</h2>
+        <p class="lede">Hotel search is coming back soon. <button id="account-signout" class="signout" type="button">Sign out</button></p>
       </div>
 
       <div id="search" hidden>
@@ -286,7 +295,12 @@
     const statusEl = document.getElementById("status");
     const resultsEl = document.getElementById("results");
     const searchButton = document.getElementById("search-button");
-    const frame = document.getElementById("fora-login");
+    const accountEl = document.getElementById("account");
+    const accountGreeting = document.getElementById("account-greeting");
+    const loginForm = document.getElementById("login-form");
+    const loginSelect = document.getElementById("login-user");
+    const loginStatus = document.getElementById("login-status");
+    const USER_KEY = "homebody_user";
 
     const greetingEl = document.getElementById("greeting");
     const navCta = document.getElementById("nav-cta");
@@ -462,57 +476,75 @@
     document.getElementById("checkout-close").addEventListener("click", closeCheckout);
     document.getElementById("booked-done").addEventListener("click", closeCheckout);
 
-    function decodeTokenPayload(token) {
+    function currentUser() {
       try {
-        return JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+        return JSON.parse(sessionStorage.getItem(USER_KEY));
       } catch {
         return null;
       }
     }
 
-    async function loadTravelerName() {
-      const token = sessionStorage.getItem(TOKEN_KEY);
-      const clientId = token ? decodeTokenPayload(token)?.client_id : null;
-      if (!clientId) return;
+    async function loadUsers(selectedId) {
+      loginSelect.innerHTML = "";
+      loginSelect.append(new Option("Loading travelers…", ""));
       try {
-        const response = await fetch(`${FORA_API_BASE}/client/v1/client/${encodeURIComponent(clientId)}/`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (!response.ok) return;
-        const client = await response.json();
-        const name = client.preferred_name || client.first_name;
-        if (!name) return;
-        greetingEl.textContent = `Welcome back, ${name}.`;
-        navCta.textContent = `Hi, ${name}`;
-      } catch {
-        return;
+        const response = await fetch(`${WORKER_URL}/users`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Could not load travelers (${response.status}).`);
+
+        loginSelect.innerHTML = "";
+        loginSelect.append(new Option(data.users.length ? "Choose a traveler" : "No travelers yet. Sign up above.", ""));
+        for (const user of data.users) {
+          const name = `${user.first_name} ${user.last_name}`.trim();
+          loginSelect.append(new Option(name, JSON.stringify({ id: user.id, name: user.first_name })));
+        }
+        if (selectedId) {
+          const match = [...loginSelect.options].find(option => option.value && JSON.parse(option.value).id === selectedId);
+          if (match) loginSelect.value = match.value;
+        }
+      } catch (error) {
+        loginSelect.innerHTML = "";
+        loginSelect.append(new Option("Couldn't load travelers", ""));
+        loginStatus.textContent = error.message;
       }
     }
 
-    function showLogin({ signOut = false } = {}) {
-      frame.src = `${FORA_APP_ORIGIN}/client-portal/${encodeURIComponent(ADVISOR_SLUG)}/embed/login${signOut ? "?signout=1" : ""}`;
-      greetingEl.textContent = "You're signed in.";
+    function showLoggedOut() {
+      sessionStorage.removeItem(USER_KEY);
       navCta.textContent = "Client sign in";
+      accountEl.hidden = true;
       searchEl.hidden = true;
       loginEl.hidden = false;
+      loginStatus.textContent = "";
+      loadUsers();
     }
 
-    function showSearch() {
+    function showLoggedIn(user) {
+      accountGreeting.textContent = `Welcome back, ${user.name}.`;
+      navCta.textContent = `Hi, ${user.name}`;
       loginEl.hidden = true;
-      searchEl.hidden = false;
-      loadTravelerName();
+      searchEl.hidden = true;
+      accountEl.hidden = false;
     }
 
-    sessionStorage.getItem(TOKEN_KEY) ? showSearch() : showLogin();
+    const savedUser = currentUser();
+    savedUser ? showLoggedIn(savedUser) : showLoggedOut();
+
+    loginForm.addEventListener("submit", event => {
+      event.preventDefault();
+      if (!loginSelect.value) return;
+      const user = JSON.parse(loginSelect.value);
+      sessionStorage.setItem(USER_KEY, JSON.stringify(user));
+      showLoggedIn(user);
+    });
+
+    document.getElementById("account-signout").addEventListener("click", showLoggedOut);
 
     window.addEventListener("message", event => {
       if (event.origin !== FORA_APP_ORIGIN) return;
       const message = event.data ?? {};
 
-      if (message.type === "fora:traveler-login" && message.token) {
-        sessionStorage.setItem(TOKEN_KEY, message.token);
-        showSearch();
-      } else if (message.type === "fora:resize" && event.source === checkoutFrame.contentWindow) {
+      if (message.type === "fora:resize" && event.source === checkoutFrame.contentWindow) {
         const height = Number(message.height);
         if (height > 0) checkoutFrame.style.height = `${Math.min(height, 2000)}px`;
       } else if (message.type === "fora:booking-result" && event.source === checkoutFrame.contentWindow) {
@@ -525,7 +557,7 @@
       resultsEl.innerHTML = "";
       statusEl.textContent = "";
       roomsEl.hidden = true;
-      showLogin({ signOut: true });
+      showLoggedOut();
     });
 
     const signupForm = document.getElementById("signup-form");
@@ -549,8 +581,9 @@
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || `Sign-up failed (${response.status}).`);
         signupForm.reset();
-        signupStatus.textContent = `You're all set, ${data.first_name}! Sign in below with ${values.phone}.`;
-        frame.scrollIntoView({ behavior: "smooth", block: "center" });
+        signupStatus.textContent = `You're all set, ${data.first_name}! Log in below.`;
+        await loadUsers(data.id);
+        loginForm.scrollIntoView({ behavior: "smooth", block: "center" });
       } catch (error) {
         signupStatus.className = "signup-status error";
         signupStatus.textContent = error.message;

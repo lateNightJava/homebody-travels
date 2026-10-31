@@ -1,16 +1,12 @@
-import { SignJWT, importPKCS8 } from "jose";
-
-const CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_PATTERN = /^\+?[0-9 ()-]{7,20}$/;
 const MAX_NAME_LENGTH = 128;
-
-let cachedToken = null;
+const USER_KEY_PREFIX = "user:";
 
 function corsHeaders(env) {
   return {
     "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN,
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     Vary: "Origin"
   };
@@ -21,43 +17,6 @@ function json(body, status, env) {
     status,
     headers: { "Content-Type": "application/json", ...corsHeaders(env) }
   });
-}
-
-async function getForaToken(env) {
-  if (cachedToken && cachedToken.expiresAt - 60_000 > Date.now()) {
-    return cachedToken.value;
-  }
-
-  const tokenUrl = `${env.FORA_API_BASE}/oauth/token/`;
-  const privateKey = await importPKCS8(env.FORA_PRIVATE_KEY, "ES256");
-  const assertion = await new SignJWT({})
-    .setProtectedHeader({ alg: "ES256", kid: env.FORA_KID })
-    .setIssuer(env.FORA_CLIENT_ID)
-    .setSubject(env.FORA_CLIENT_ID)
-    .setAudience(tokenUrl)
-    .setIssuedAt()
-    .setExpirationTime("60s")
-    .setJti(crypto.randomUUID())
-    .sign(privateKey);
-
-  const response = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "client_credentials",
-      scope: "clients:write",
-      client_id: env.FORA_CLIENT_ID,
-      client_assertion_type: CLIENT_ASSERTION_TYPE,
-      client_assertion: assertion
-    })
-  });
-  if (!response.ok) {
-    throw new Error(`Fora token request failed (${response.status}): ${await response.text()}`);
-  }
-
-  const data = await response.json();
-  cachedToken = { value: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
-  return cachedToken.value;
 }
 
 function parseSignup(body) {
@@ -78,25 +37,28 @@ function parseSignup(body) {
   return { signup: { firstName, lastName, email, phone } };
 }
 
-async function createClient(env, { firstName, lastName, email, phone }) {
-  const token = await getForaToken(env);
-  const response = await fetch(`${env.FORA_API_BASE}/v2/clients/`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      first_name: firstName,
-      last_name: lastName,
-      type: "client",
-      skip_dup_check: true,
-      emails: email ? [{ email, email_type: "personal" }] : [],
-      phone_numbers: phone ? [{ phone_number: phone, number_type: "mobile" }] : []
-    })
+async function createUser(env, { firstName, lastName, email, phone }) {
+  const user = {
+    id: crypto.randomUUID(),
+    first_name: firstName,
+    last_name: lastName,
+    email,
+    phone,
+    fora_client_id: null
+  };
+  await env.USERS.put(`${USER_KEY_PREFIX}${user.id}`, JSON.stringify(user), {
+    metadata: { first_name: firstName, last_name: lastName }
   });
-  if (!response.ok) {
-    throw new Error(`Fora create client failed (${response.status}): ${await response.text()}`);
-  }
-  const created = await response.json();
-  return { id: created.id, first_name: created.first_name };
+  return user;
+}
+
+async function listUsers(env) {
+  const { keys } = await env.USERS.list({ prefix: USER_KEY_PREFIX });
+  return keys.map(({ name, metadata }) => ({
+    id: name.slice(USER_KEY_PREFIX.length),
+    first_name: metadata?.first_name ?? "",
+    last_name: metadata?.last_name ?? ""
+  }));
 }
 
 export default {
@@ -106,21 +68,20 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders(env) });
     }
-    if (request.method !== "POST" || pathname !== "/signup") {
-      return json({ error: "Not found." }, 404, env);
-    }
     if (request.headers.get("Origin") !== env.ALLOWED_ORIGIN) {
       return json({ error: "Forbidden." }, 403, env);
     }
 
-    const { signup, error } = parseSignup(await request.json().catch(() => null));
-    if (error) return json({ error }, 400, env);
-
-    try {
-      return json(await createClient(env, signup), 201, env);
-    } catch (err) {
-      console.error(err);
-      return json({ error: "Could not submit right now. Please try again." }, 502, env);
+    if (request.method === "GET" && pathname === "/users") {
+      return json({ users: await listUsers(env) }, 200, env);
     }
+
+    if (request.method === "POST" && pathname === "/signup") {
+      const { signup, error } = parseSignup(await request.json().catch(() => null));
+      if (error) return json({ error }, 400, env);
+      return json(await createUser(env, signup), 201, env);
+    }
+
+    return json({ error: "Not found." }, 404, env);
   }
 };
