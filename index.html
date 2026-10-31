@@ -496,7 +496,7 @@
         loginSelect.append(new Option(data.users.length ? "Choose a traveler" : "No travelers yet. Sign up above.", ""));
         for (const user of data.users) {
           const name = `${user.first_name} ${user.last_name}`.trim();
-          loginSelect.append(new Option(name, JSON.stringify({ id: user.id, name: user.first_name })));
+          loginSelect.append(new Option(name, JSON.stringify({ id: user.id, name })));
         }
         if (selectedId) {
           const match = [...loginSelect.options].find(option => option.value && JSON.parse(option.value).id === selectedId);
@@ -581,7 +581,7 @@
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || `Sign-up failed (${response.status}).`);
         signupForm.reset();
-        signupStatus.textContent = `You're all set, ${data.first_name}! Log in below.`;
+        signupStatus.textContent = `You're all set, ${data.first_name} ${data.last_name}! Log in below.`;
         await loadUsers(data.id);
         loginForm.scrollIntoView({ behavior: "smooth", block: "center" });
       } catch (error) {
