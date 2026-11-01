@@ -171,11 +171,6 @@
         <p id="login-status" class="status"></p>
       </div>
 
-      <div id="account" hidden>
-        <h2 id="account-greeting">Welcome back.</h2>
-        <p class="lede">Hotel search is coming back soon. <button id="account-signout" class="signout" type="button">Sign out</button></p>
-      </div>
-
       <div id="search" hidden>
         <h2>Find your next stay</h2>
         <p class="lede"><span id="greeting">You're signed in.</span> <button id="signout" class="signout" type="button">Sign out</button></p>
@@ -279,13 +274,6 @@
         body.appendChild(row);
       }
 
-      if (supplier.id && supplier.is_bookable !== false) {
-        const book = el("button", "card-book", "See rooms");
-        book.type = "button";
-        book.addEventListener("click", () => loadRooms(supplier));
-        body.appendChild(book);
-      }
-
       card.appendChild(body);
       return card;
     }
@@ -295,8 +283,6 @@
     const statusEl = document.getElementById("status");
     const resultsEl = document.getElementById("results");
     const searchButton = document.getElementById("search-button");
-    const accountEl = document.getElementById("account");
-    const accountGreeting = document.getElementById("account-greeting");
     const loginForm = document.getElementById("login-form");
     const loginSelect = document.getElementById("login-user");
     const loginStatus = document.getElementById("login-status");
@@ -512,7 +498,6 @@
     function showLoggedOut() {
       sessionStorage.removeItem(USER_KEY);
       navCta.textContent = "Client sign in";
-      accountEl.hidden = true;
       searchEl.hidden = true;
       loginEl.hidden = false;
       loginStatus.textContent = "";
@@ -520,11 +505,10 @@
     }
 
     function showLoggedIn(user) {
-      accountGreeting.textContent = `Welcome back, ${user.name}.`;
+      greetingEl.textContent = `Welcome back, ${user.name}.`;
       navCta.textContent = `Hi, ${user.name}`;
       loginEl.hidden = true;
-      searchEl.hidden = true;
-      accountEl.hidden = false;
+      searchEl.hidden = false;
     }
 
     const savedUser = currentUser();
@@ -537,8 +521,6 @@
       sessionStorage.setItem(USER_KEY, JSON.stringify(user));
       showLoggedIn(user);
     });
-
-    document.getElementById("account-signout").addEventListener("click", showLoggedOut);
 
     window.addEventListener("message", event => {
       if (event.origin !== FORA_APP_ORIGIN) return;
@@ -553,7 +535,6 @@
     });
 
     document.getElementById("signout").addEventListener("click", () => {
-      sessionStorage.removeItem(TOKEN_KEY);
       resultsEl.innerHTML = "";
       statusEl.textContent = "";
       roomsEl.hidden = true;
@@ -595,7 +576,6 @@
     document.getElementById("search-form").addEventListener("submit", async event => {
       event.preventDefault();
       const query = document.getElementById("query").value.trim();
-      const params = new URLSearchParams({ supplier_types: "hotel", search: query, limit: "24" });
 
       searchButton.disabled = true;
       statusEl.className = "status";
@@ -604,15 +584,9 @@
       roomsEl.hidden = true;
 
       try {
-        const response = await fetch(`${FORA_API_BASE}/v1/supplier-database/suppliers/?${params}`, {
-          headers: { Authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY)}` }
-        });
-        if (response.status === 401 || response.status === 403) {
-          sessionStorage.removeItem(TOKEN_KEY);
-          throw new Error(`Your session ended (${response.status}). Sign out and sign in again.`);
-        }
-        if (!response.ok) throw new Error(`Search failed (${response.status}).`);
-        const data = await response.json();
+        const response = await fetch(`${WORKER_URL}/hotels?${new URLSearchParams({ search: query })}`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Search failed (${response.status}).`);
         const results = data.results ?? [];
         statusEl.textContent = results.length ? `${data.count ?? results.length} hotels found` : "No hotels found. Try another destination.";
         for (const supplier of results) resultsEl.appendChild(renderSupplierCard(supplier));

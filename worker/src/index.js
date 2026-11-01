@@ -10,6 +10,8 @@ const ASSERTION_AUDIENCE = "fora:app-token";
 const TOKEN_KEY = "fora:app_token";
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 const KV_MIN_TTL_SECONDS = 60;
+const HOTEL_SEARCH_LIMIT = 24;
+const MAX_SEARCH_LENGTH = 128;
 
 function corsHeaders(env) {
   return {
@@ -90,6 +92,20 @@ async function createForaClient(env, { firstName, lastName, email, phone }) {
   return client.id;
 }
 
+async function searchForaHotels(env, query) {
+  const { access_token } = await getForaToken(env);
+  const params = new URLSearchParams({ supplier_types: "hotel", search: query, limit: String(HOTEL_SEARCH_LIMIT) });
+  const response = await fetch(`${env.FORA_API_BASE}/published/suppliers/?${params}`, {
+    headers: { Authorization: `Bearer ${access_token}` }
+  });
+  if (!response.ok) {
+    throw new Error(`Fora hotel search failed (${response.status}): ${await response.text()}`);
+  }
+
+  const { count, results } = await response.json();
+  return { count, results };
+}
+
 function parseSignup(body) {
   const field = name => (typeof body?.[name] === "string" ? body[name].trim() : "");
   const firstName = field("first_name");
@@ -134,7 +150,7 @@ async function listUsers(env) {
 
 export default {
   async fetch(request, env) {
-    const { pathname } = new URL(request.url);
+    const { pathname, searchParams } = new URL(request.url);
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders(env) });
@@ -145,6 +161,19 @@ export default {
 
     if (request.method === "GET" && pathname === "/users") {
       return json({ users: await listUsers(env) }, 200, env);
+    }
+
+    if (request.method === "GET" && pathname === "/hotels") {
+      const query = (searchParams.get("search") ?? "").trim();
+      if (!query) return json({ error: "Enter a destination." }, 400, env);
+      if (query.length > MAX_SEARCH_LENGTH) return json({ error: "Search is too long." }, 400, env);
+
+      try {
+        return json(await searchForaHotels(env, query), 200, env);
+      } catch (err) {
+        console.error(err);
+        return json({ error: "Hotel search is unavailable right now." }, 502, env);
+      }
     }
 
     if (request.method === "GET" && pathname === "/fora/token-status") {
