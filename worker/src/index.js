@@ -12,6 +12,10 @@ const TOKEN_REFRESH_MARGIN_MS = 60_000;
 const KV_MIN_TTL_SECONDS = 60;
 const HOTEL_SEARCH_LIMIT = 24;
 const MAX_SEARCH_LENGTH = 128;
+const HOTEL_ROOMS_PATH = /^\/hotels\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/rooms$/;
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_ADULTS = 9;
+const ROOMS_CURRENCY = "USD";
 
 function corsHeaders(env) {
   return {
@@ -117,6 +121,43 @@ async function searchForaHotels(env, query, offset) {
   return { count, results, next_offset: nextOffset(next) };
 }
 
+async function fetchForaRooms(env, supplierId, { start, end, adults }) {
+  const { access_token } = await getForaToken(env);
+  const response = await fetch(`${env.FORA_API_BASE}/published/suppliers/${supplierId}/rates/`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      start_date: start,
+      end_date: end,
+      number_of_adults: adults,
+      currency: ROOMS_CURRENCY
+    })
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Fora rooms request failed (${response.status}): ${await response.text()}`);
+  }
+
+  const { cart_id, rates } = await response.json();
+  return { cart_id, rates };
+}
+
+function parseStay(body) {
+  const start = typeof body?.start === "string" ? body.start : "";
+  const end = typeof body?.end === "string" ? body.end : "";
+  const adults = Number(body?.adults);
+
+  if (!ISO_DATE_PATTERN.test(start) || !ISO_DATE_PATTERN.test(end)) {
+    return { error: "Choose your check-in and check-out dates." };
+  }
+  if (end <= start) return { error: "Check-out must be after check-in." };
+  if (!Number.isInteger(adults) || adults < 1 || adults > MAX_ADULTS) {
+    return { error: `Choose between 1 and ${MAX_ADULTS} guests.` };
+  }
+
+  return { stay: { start, end, adults } };
+}
+
 function parseSignup(body) {
   const field = name => (typeof body?.[name] === "string" ? body[name].trim() : "");
   const firstName = field("first_name");
@@ -186,6 +227,21 @@ export default {
       } catch (err) {
         console.error(err);
         return json({ error: "Hotel search is unavailable right now." }, 502, env);
+      }
+    }
+
+    const roomsMatch = pathname.match(HOTEL_ROOMS_PATH);
+    if (request.method === "POST" && roomsMatch) {
+      const { stay, error } = parseStay(await request.json().catch(() => null));
+      if (error) return json({ error }, 400, env);
+
+      try {
+        const rooms = await fetchForaRooms(env, roomsMatch[1], stay);
+        if (!rooms) return json({ error: "This hotel can't be booked online." }, 404, env);
+        return json(rooms, 200, env);
+      } catch (err) {
+        console.error(err);
+        return json({ error: "Rooms are unavailable right now." }, 502, env);
       }
     }
 

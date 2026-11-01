@@ -217,9 +217,7 @@
 
   <script>
     const FORA_APP_ORIGIN = "https://qa2.advisor.forastaging.net";
-    const FORA_API_BASE = "https://qa2.api.forastaging.net";
     const ADVISOR_SLUG = new URLSearchParams(location.search).get("advisor") || "mark";
-    const TOKEN_KEY = "fora_traveler_token";
     const WORKER_URL = "https://homebody-api.mark-25d.workers.dev";
     const CLOUDINARY_BASE = "https://res.cloudinary.com/foratravelstaging/image/upload/f_auto,q_auto,c_fill,w_640,h_427";
 
@@ -276,6 +274,13 @@
         body.appendChild(row);
       }
 
+      if (supplier.id && supplier.is_bookable !== false) {
+        const rooms = el("button", "card-book", "See rooms");
+        rooms.type = "button";
+        rooms.addEventListener("click", () => loadRooms(supplier));
+        body.appendChild(rooms);
+      }
+
       card.appendChild(body);
       return card;
     }
@@ -321,16 +326,8 @@
       return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
     }
 
-    function collectRates(data) {
-      const roomRates = (data.rooms ?? []).flatMap(room => room.rates ?? []);
-      const programRates = (data.programs ?? []).flatMap(program =>
-        (program.rates ?? []).map(rate => ({ ...rate, program: rate.program ?? { id: program.id, name: program.name } }))
-      );
-      return (roomRates.length ? roomRates : programRates).filter(rate => rate.price && !rate.is_book_with_advisor);
-    }
-
     async function loadRooms(supplier) {
-      const search = { start: checkInEl.value, end: checkOutEl.value, adults: Number(adultsEl.value) };
+      const stay = { start: checkInEl.value, end: checkOutEl.value, adults: Number(adultsEl.value) };
       roomsEl.hidden = false;
       roomsTitle.textContent = supplier.name ?? "Rooms";
       roomsStatus.className = "status";
@@ -339,66 +336,32 @@
       roomsEl.scrollIntoView({ behavior: "smooth", block: "start" });
 
       try {
-        const response = await fetch(`${FORA_API_BASE}/v2/supplier-database/suppliers/${encodeURIComponent(supplier.id)}/rates/`, {
+        const response = await fetch(`${WORKER_URL}/hotels/${encodeURIComponent(supplier.id)}/rooms`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY)}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            supplier_id: supplier.id,
-            start_date: search.start,
-            end_date: search.end,
-            number_of_adults: search.adults,
-            children_ages: [],
-            currency: "USD"
-          })
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(stay)
         });
-        if (!response.ok) throw new Error(`Couldn't load rooms (${response.status}).`);
-        const data = await response.json();
-        const rates = collectRates(data);
-        roomsStatus.textContent = rates.length ? `${rates.length} rates · ${search.start} → ${search.end}` : "No bookable rooms for these dates.";
-        for (const rate of rates) roomsList.appendChild(renderRate(rate, data.cart_id, supplier, search));
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Couldn't load rooms (${response.status}).`);
+        const rates = data.rates ?? [];
+        roomsStatus.textContent = rates.length ? `${rates.length} rates · ${stay.start} → ${stay.end}` : "No bookable rooms for these dates.";
+        for (const rate of rates) roomsList.appendChild(renderRate(rate));
       } catch (error) {
         roomsStatus.className = "status error";
         roomsStatus.textContent = error.message;
       }
     }
 
-    function renderRate(rate, cartId, supplier, search) {
-      const grandTotal = rate.price.grand_total_items.find(item => item.category === "grand_total");
-      const isRefundable = rate.policies?.cancellations?.some(policy => policy.refundable);
+    function renderRate(rate) {
       const row = el("div", "room");
 
       const info = el("div");
-      info.appendChild(el("div", "room-name", rate.room?.description || rate.room?.name || "Room"));
-      info.appendChild(el("div", "room-meta", [rate.program?.client_facing_name || rate.program?.name, isRefundable ? "Refundable" : "Non-refundable"].filter(Boolean).join(" · ")));
+      info.appendChild(el("div", "room-name", rate.room_description || "Room"));
+      info.appendChild(el("div", "room-meta", [rate.program_name, rate.is_refundable ? "Refundable" : "Non-refundable"].filter(Boolean).join(" · ")));
       row.appendChild(info);
 
       const side = el("div", "room-side");
-      if (grandTotal) side.appendChild(el("span", "room-price", formatMoney(grandTotal.total, grandTotal.currency)));
-      const book = el("button", "card-book", "Book");
-      book.type = "button";
-      book.disabled = !grandTotal || !cartId;
-      book.addEventListener("click", () => openCheckout({
-        hotel: supplier.name ?? "Your hotel",
-        room: rate.room?.description || rate.room?.name || "Room",
-        start: search.start,
-        end: search.end,
-        adults: search.adults,
-        total: formatMoney(grandTotal.total, grandTotal.currency),
-        refundable: isRefundable
-      }, {
-        cart: cartId,
-        rate: rate.id,
-        package: String(rate.is_package_rate),
-        program: rate.program.id,
-        amount: String(grandTotal.original_total),
-        currency: grandTotal.original_currency,
-        supplier: supplier.id,
-        start: search.start,
-        end: search.end,
-        adults: String(search.adults),
-        ...CHECKOUT_THEME
-      }));
-      side.appendChild(book);
+      side.appendChild(el("span", "room-price", formatMoney(rate.price.total, rate.price.currency)));
       row.appendChild(side);
       return row;
     }
