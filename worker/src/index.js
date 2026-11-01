@@ -92,9 +92,20 @@ async function createForaClient(env, { firstName, lastName, email, phone }) {
   return client.id;
 }
 
-async function searchForaHotels(env, query) {
+function nextOffset(nextUrl) {
+  if (!nextUrl) return null;
+  const offset = Number(new URL(nextUrl).searchParams.get("offset"));
+  return Number.isInteger(offset) ? offset : null;
+}
+
+async function searchForaHotels(env, query, offset) {
   const { access_token } = await getForaToken(env);
-  const params = new URLSearchParams({ supplier_types: "hotel", search: query, limit: String(HOTEL_SEARCH_LIMIT) });
+  const params = new URLSearchParams({
+    supplier_types: "hotel",
+    search: query,
+    limit: String(HOTEL_SEARCH_LIMIT),
+    offset: String(offset)
+  });
   const response = await fetch(`${env.FORA_API_BASE}/published/suppliers/?${params}`, {
     headers: { Authorization: `Bearer ${access_token}` }
   });
@@ -102,8 +113,8 @@ async function searchForaHotels(env, query) {
     throw new Error(`Fora hotel search failed (${response.status}): ${await response.text()}`);
   }
 
-  const { count, results } = await response.json();
-  return { count, results };
+  const { count, next, results } = await response.json();
+  return { count, results, next_offset: nextOffset(next) };
 }
 
 function parseSignup(body) {
@@ -167,9 +178,11 @@ export default {
       const query = (searchParams.get("search") ?? "").trim();
       if (!query) return json({ error: "Enter a destination." }, 400, env);
       if (query.length > MAX_SEARCH_LENGTH) return json({ error: "Search is too long." }, 400, env);
+      const offset = Number(searchParams.get("offset") ?? 0);
+      if (!Number.isInteger(offset) || offset < 0) return json({ error: "Invalid page." }, 400, env);
 
       try {
-        return json(await searchForaHotels(env, query), 200, env);
+        return json(await searchForaHotels(env, query, offset), 200, env);
       } catch (err) {
         console.error(err);
         return json({ error: "Hotel search is unavailable right now." }, 502, env);

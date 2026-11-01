@@ -50,6 +50,7 @@
     .search-bar button { padding: 12px 20px; font: inherit; font-weight: 600; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-ink); cursor: pointer; }
     .search-bar button:disabled { opacity: 0.6; cursor: progress; }
     .status { color: var(--muted); min-height: 1.6em; }
+    .load-more { display: block; margin: 24px auto 0; }
     .status.error { color: #b3261e; }
     .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px; padding: 0; margin: 16px 0 0; list-style: none; }
     .card { border: 1px solid var(--line); border-radius: 16px; background: var(--bg); overflow: hidden; display: flex; flex-direction: column; }
@@ -188,6 +189,7 @@
         </form>
         <p id="status" class="status"></p>
         <ul id="results" class="results"></ul>
+        <button id="load-more" class="card-book load-more" type="button" hidden>Load more hotels</button>
         <section id="rooms" class="rooms" hidden>
           <h3 id="rooms-title"></h3>
           <p id="rooms-status" class="status"></p>
@@ -536,6 +538,7 @@
 
     document.getElementById("signout").addEventListener("click", () => {
       resultsEl.innerHTML = "";
+      loadMoreButton.hidden = true;
       statusEl.textContent = "";
       roomsEl.hidden = true;
       showLoggedOut();
@@ -573,30 +576,45 @@
       }
     });
 
-    document.getElementById("search-form").addEventListener("submit", async event => {
-      event.preventDefault();
-      const query = document.getElementById("query").value.trim();
+    const loadMoreButton = document.getElementById("load-more");
+    let hotelSearch = null;
 
+    async function loadHotels() {
+      const { query, offset } = hotelSearch;
       searchButton.disabled = true;
+      loadMoreButton.disabled = true;
       statusEl.className = "status";
-      statusEl.textContent = "Searching…";
-      resultsEl.innerHTML = "";
-      roomsEl.hidden = true;
+      statusEl.textContent = offset ? "Loading more hotels…" : "Searching…";
 
       try {
-        const response = await fetch(`${WORKER_URL}/hotels?${new URLSearchParams({ search: query })}`);
+        const response = await fetch(`${WORKER_URL}/hotels?${new URLSearchParams({ search: query, offset: String(offset) })}`);
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || `Search failed (${response.status}).`);
-        const results = data.results ?? [];
-        statusEl.textContent = results.length ? `${data.count ?? results.length} hotels found` : "No hotels found. Try another destination.";
-        for (const supplier of results) resultsEl.appendChild(renderSupplierCard(supplier));
+        for (const supplier of data.results ?? []) resultsEl.appendChild(renderSupplierCard(supplier));
+
+        const shown = resultsEl.children.length;
+        statusEl.textContent = shown ? `Showing ${shown} of ${data.count} hotels` : "No hotels found. Try another destination.";
+        hotelSearch = { query, offset: data.next_offset };
+        loadMoreButton.hidden = data.next_offset == null;
       } catch (error) {
         statusEl.className = "status error";
         statusEl.textContent = error.message;
       } finally {
         searchButton.disabled = false;
+        loadMoreButton.disabled = false;
       }
+    }
+
+    document.getElementById("search-form").addEventListener("submit", event => {
+      event.preventDefault();
+      hotelSearch = { query: document.getElementById("query").value.trim(), offset: 0 };
+      resultsEl.innerHTML = "";
+      loadMoreButton.hidden = true;
+      roomsEl.hidden = true;
+      loadHotels();
     });
+
+    loadMoreButton.addEventListener("click", loadHotels);
   </script>
 </body>
 </html>
