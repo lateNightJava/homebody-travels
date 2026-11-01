@@ -12,7 +12,10 @@ const TOKEN_REFRESH_MARGIN_MS = 60_000;
 const KV_MIN_TTL_SECONDS = 60;
 const HOTEL_SEARCH_LIMIT = 24;
 const MAX_SEARCH_LENGTH = 128;
-const HOTEL_ROOMS_PATH = /^\/hotels\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/rooms$/;
+const UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const HOTEL_ROOMS_PATH = new RegExp(`^/hotels/(${UUID_PATTERN})/rooms$`);
+const RATE_CHECK_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/rate-checks$`);
+const MAX_RATE_ID_LENGTH = 256;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_ADULTS = 9;
 const ROOMS_CURRENCY = "USD";
@@ -142,6 +145,21 @@ async function fetchForaRooms(env, supplierId, { start, end, adults }) {
   return { cart_id, rates };
 }
 
+async function checkForaRate(env, cartId, rateId) {
+  const { access_token } = await getForaToken(env);
+  const response = await fetch(`${env.FORA_API_BASE}/published/carts/${cartId}/rate-checks/`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ rate_id: rateId })
+  });
+  if (response.status === 400 || response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Fora rate check failed (${response.status}): ${await response.text()}`);
+  }
+
+  return response.json();
+}
+
 function parseStay(body) {
   const start = typeof body?.start === "string" ? body.start : "";
   const end = typeof body?.end === "string" ? body.end : "";
@@ -242,6 +260,24 @@ export default {
       } catch (err) {
         console.error(err);
         return json({ error: "Rooms are unavailable right now." }, 502, env);
+      }
+    }
+
+    const rateCheckMatch = pathname.match(RATE_CHECK_PATH);
+    if (request.method === "POST" && rateCheckMatch) {
+      const body = await request.json().catch(() => null);
+      const rateId = typeof body?.rate_id === "string" ? body.rate_id : "";
+      if (!rateId || rateId.length > MAX_RATE_ID_LENGTH) {
+        return json({ error: "Choose a room." }, 400, env);
+      }
+
+      try {
+        const rate = await checkForaRate(env, rateCheckMatch[1], rateId);
+        if (!rate) return json({ error: "This room is no longer available." }, 404, env);
+        return json(rate, 200, env);
+      } catch (err) {
+        console.error(err);
+        return json({ error: "We couldn't confirm this room right now." }, 502, env);
       }
     }
 

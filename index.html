@@ -78,6 +78,8 @@
     .room-side { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
     .room-price { font-weight: 600; }
     .room .card-book { margin-top: 0; }
+    .selection { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .selection h4 { font-family: Fraunces, Georgia, serif; font-size: 18px; margin: 0 0 4px; }
 
     .checkout-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(43, 36, 32, 0.45); display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; overflow-y: auto; }
     .checkout-modal { width: 100%; max-width: 520px; background: var(--surface); border-radius: 18px; padding: 8px; }
@@ -194,6 +196,11 @@
           <h3 id="rooms-title"></h3>
           <p id="rooms-status" class="status"></p>
           <div id="rooms-list"></div>
+          <div id="selection" class="selection" hidden>
+            <h4>Your room</h4>
+            <p id="selection-status" class="status"></p>
+            <dl id="selection-details" class="booked-details"></dl>
+          </div>
         </section>
       </div>
     </div>
@@ -305,6 +312,9 @@
     const roomsTitle = document.getElementById("rooms-title");
     const roomsStatus = document.getElementById("rooms-status");
     const roomsList = document.getElementById("rooms-list");
+    const selectionEl = document.getElementById("selection");
+    const selectionStatus = document.getElementById("selection-status");
+    const selectionDetails = document.getElementById("selection-details");
     const checkoutHeading = document.getElementById("checkout-heading");
     const bookedEl = document.getElementById("booked");
     const bookedTitle = document.getElementById("booked-title");
@@ -333,6 +343,7 @@
       roomsStatus.className = "status";
       roomsStatus.textContent = "Checking live rates…";
       roomsList.innerHTML = "";
+      selectionEl.hidden = true;
       roomsEl.scrollIntoView({ behavior: "smooth", block: "start" });
 
       try {
@@ -345,14 +356,14 @@
         if (!response.ok) throw new Error(data.error || `Couldn't load rooms (${response.status}).`);
         const rates = data.rates ?? [];
         roomsStatus.textContent = rates.length ? `${rates.length} rates · ${stay.start} → ${stay.end}` : "No bookable rooms for these dates.";
-        for (const rate of rates) roomsList.appendChild(renderRate(rate));
+        for (const rate of rates) roomsList.appendChild(renderRate(rate, data.cart_id));
       } catch (error) {
         roomsStatus.className = "status error";
         roomsStatus.textContent = error.message;
       }
     }
 
-    function renderRate(rate) {
+    function renderRate(rate, cartId) {
       const row = el("div", "room");
 
       const info = el("div");
@@ -362,8 +373,57 @@
 
       const side = el("div", "room-side");
       side.appendChild(el("span", "room-price", formatMoney(rate.price.total, rate.price.currency)));
+      const select = el("button", "card-book", "Select");
+      select.type = "button";
+      select.addEventListener("click", () => checkRate(cartId, rate.id));
+      side.appendChild(select);
       row.appendChild(side);
       return row;
+    }
+
+    async function checkRate(cartId, rateId) {
+      selectionEl.hidden = false;
+      selectionStatus.className = "status";
+      selectionStatus.textContent = "Confirming the price and terms…";
+      selectionDetails.innerHTML = "";
+      selectionEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+      try {
+        const response = await fetch(`${WORKER_URL}/carts/${encodeURIComponent(cartId)}/rate-checks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rate_id: rateId })
+        });
+        const rate = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(rate.error || `Couldn't confirm this room (${response.status}).`);
+        selectionStatus.textContent = "Price and terms confirmed. Booking is the next step.";
+        renderSelection(rate);
+      } catch (error) {
+        selectionStatus.className = "status error";
+        selectionStatus.textContent = error.message;
+      }
+    }
+
+    function renderSelection(rate) {
+      const refundableUntil = rate.cancellations.find(cancellation => cancellation.refundable)?.valid_until;
+      const payments = rate.deposits.map(deposit =>
+        [formatMoney(deposit.deposit_amount, deposit.deposit_currency), deposit.deposit_date].filter(Boolean).join(" on ")
+      );
+      const rows = [
+        ["Room", rate.room_description],
+        ["Total", formatMoney(rate.price.total, rate.price.currency)],
+        ["Cancellation", rate.is_refundable ? (refundableUntil ? `Refundable until ${refundableUntil}` : "Refundable") : "Non-refundable"],
+        ["Payments", payments.join(", ")],
+        ["Check-in", rate.check_in?.slice(0, 5)],
+        ["Check-out", rate.check_out?.slice(0, 5)]
+      ];
+      for (const [label, value] of rows) {
+        if (!value) continue;
+        const row = el("div");
+        row.appendChild(el("dt", null, label));
+        row.appendChild(el("dd", null, String(value)));
+        selectionDetails.appendChild(row);
+      }
     }
 
     let pendingBooking = null;
