@@ -78,8 +78,12 @@
     .room-side { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
     .room-price { font-weight: 600; }
     .room .card-book { margin-top: 0; }
-    .selection { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
     .selection h4 { font-family: Fraunces, Georgia, serif; font-size: 18px; margin: 0 0 4px; }
+    .back-link { background: none; border: 0; padding: 0; margin-bottom: 12px; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+    .room-group { padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .room-group:last-child { border-bottom: 0; }
+    .room-group > .room-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 4px; }
+    .room-group .room { padding: 8px 0; border-bottom: 0; }
 
     .checkout-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(43, 36, 32, 0.45); display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; overflow-y: auto; }
     .checkout-modal { width: 100%; max-width: 520px; background: var(--surface); border-radius: 18px; padding: 8px; }
@@ -193,10 +197,14 @@
         <ul id="results" class="results"></ul>
         <button id="load-more" class="card-book load-more" type="button" hidden>Load more hotels</button>
         <section id="rooms" class="rooms" hidden>
+          <button id="rooms-back" class="back-link" type="button">← All hotels</button>
           <h3 id="rooms-title"></h3>
-          <p id="rooms-status" class="status"></p>
-          <div id="rooms-list"></div>
+          <div id="rooms-view">
+            <p id="rooms-status" class="status"></p>
+            <div id="rooms-list"></div>
+          </div>
           <div id="selection" class="selection" hidden>
+            <button id="selection-back" class="back-link" type="button">← All rooms</button>
             <h4>Your room</h4>
             <p id="selection-status" class="status"></p>
             <dl id="selection-details" class="booked-details"></dl>
@@ -312,6 +320,7 @@
     const roomsTitle = document.getElementById("rooms-title");
     const roomsStatus = document.getElementById("rooms-status");
     const roomsList = document.getElementById("rooms-list");
+    const roomsView = document.getElementById("rooms-view");
     const selectionEl = document.getElementById("selection");
     const selectionStatus = document.getElementById("selection-status");
     const selectionDetails = document.getElementById("selection-details");
@@ -336,15 +345,57 @@
       return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
     }
 
+    let hotelsScrollY = 0;
+
+    function revealTop(element) {
+      if (element.getBoundingClientRect().top < 0) element.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function showHotelsView() {
+      roomsEl.hidden = true;
+      statusEl.hidden = false;
+      resultsEl.hidden = false;
+      loadMoreButton.hidden = hotelSearch?.offset == null;
+      window.scrollTo({ top: hotelsScrollY });
+    }
+
+    function showRoomsView() {
+      selectionEl.hidden = true;
+      roomsView.hidden = false;
+      roomsEl.hidden = false;
+      revealTop(roomsEl);
+    }
+
+    function showSelectionView() {
+      roomsView.hidden = true;
+      selectionEl.hidden = false;
+      revealTop(roomsEl);
+    }
+
+    document.getElementById("rooms-back").addEventListener("click", showHotelsView);
+    document.getElementById("selection-back").addEventListener("click", showRoomsView);
+
+    function groupRatesByRoom(rates) {
+      const groups = new Map();
+      for (const rate of [...rates].sort((a, b) => a.price.total - b.price.total)) {
+        const room = rate.room_description || "Room";
+        if (!groups.has(room)) groups.set(room, []);
+        groups.get(room).push(rate);
+      }
+      return groups;
+    }
+
     async function loadRooms(supplier) {
       const stay = { start: checkInEl.value, end: checkOutEl.value, adults: Number(adultsEl.value) };
-      roomsEl.hidden = false;
+      hotelsScrollY = window.scrollY;
+      statusEl.hidden = true;
+      resultsEl.hidden = true;
+      loadMoreButton.hidden = true;
       roomsTitle.textContent = supplier.name ?? "Rooms";
       roomsStatus.className = "status";
       roomsStatus.textContent = "Checking live rates…";
       roomsList.innerHTML = "";
-      selectionEl.hidden = true;
-      roomsEl.scrollIntoView({ behavior: "smooth", block: "start" });
+      showRoomsView();
 
       try {
         const response = await fetch(`${WORKER_URL}/hotels/${encodeURIComponent(supplier.id)}/rooms`, {
@@ -354,22 +405,27 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || `Couldn't load rooms (${response.status}).`);
-        const rates = data.rates ?? [];
-        roomsStatus.textContent = rates.length ? `${rates.length} rates · ${stay.start} → ${stay.end}` : "No bookable rooms for these dates.";
-        for (const rate of rates) roomsList.appendChild(renderRate(rate, data.cart_id));
+        const rooms = groupRatesByRoom(data.rates ?? []);
+        roomsStatus.textContent = rooms.size ? `${rooms.size} rooms · ${stay.start} → ${stay.end}` : "No bookable rooms for these dates.";
+        for (const [room, rates] of rooms) roomsList.appendChild(renderRoomGroup(room, rates, data.cart_id));
       } catch (error) {
         roomsStatus.className = "status error";
         roomsStatus.textContent = error.message;
       }
     }
 
+    function renderRoomGroup(room, rates, cartId) {
+      const group = el("div", "room-group");
+      const name = el("div", "room-name", room);
+      name.title = room;
+      group.appendChild(name);
+      for (const rate of rates) group.appendChild(renderRate(rate, cartId));
+      return group;
+    }
+
     function renderRate(rate, cartId) {
       const row = el("div", "room");
-
-      const info = el("div");
-      info.appendChild(el("div", "room-name", rate.room_description || "Room"));
-      info.appendChild(el("div", "room-meta", [rate.program_name, rate.is_refundable ? "Refundable" : "Non-refundable"].filter(Boolean).join(" · ")));
-      row.appendChild(info);
+      row.appendChild(el("div", "room-meta", [rate.program_name, rate.is_refundable ? "Refundable" : "Non-refundable"].filter(Boolean).join(" · ")));
 
       const side = el("div", "room-side");
       side.appendChild(el("span", "room-price", formatMoney(rate.price.total, rate.price.currency)));
@@ -382,11 +438,10 @@
     }
 
     async function checkRate(cartId, rateId) {
-      selectionEl.hidden = false;
       selectionStatus.className = "status";
       selectionStatus.textContent = "Confirming the price and terms…";
       selectionDetails.innerHTML = "";
-      selectionEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      showSelectionView();
 
       try {
         const response = await fetch(`${WORKER_URL}/carts/${encodeURIComponent(cartId)}/rate-checks`, {
@@ -563,6 +618,8 @@
       resultsEl.innerHTML = "";
       loadMoreButton.hidden = true;
       statusEl.textContent = "";
+      statusEl.hidden = false;
+      resultsEl.hidden = false;
       roomsEl.hidden = true;
       showLoggedOut();
     });
@@ -634,6 +691,8 @@
       resultsEl.innerHTML = "";
       loadMoreButton.hidden = true;
       roomsEl.hidden = true;
+      statusEl.hidden = false;
+      resultsEl.hidden = false;
       loadHotels();
     });
 
