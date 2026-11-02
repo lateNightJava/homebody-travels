@@ -208,6 +208,8 @@
             <h4>Your room</h4>
             <p id="selection-status" class="status"></p>
             <dl id="selection-details" class="booked-details"></dl>
+            <p id="book-note" class="status" hidden>Paying with the card on file.</p>
+            <button id="book-room" class="card-book" type="button" hidden>Book this room</button>
           </div>
         </section>
       </div>
@@ -324,6 +326,9 @@
     const selectionEl = document.getElementById("selection");
     const selectionStatus = document.getElementById("selection-status");
     const selectionDetails = document.getElementById("selection-details");
+    const bookButton = document.getElementById("book-room");
+    const bookNote = document.getElementById("book-note");
+    let selectedRoom = null;
     const checkoutHeading = document.getElementById("checkout-heading");
     const bookedEl = document.getElementById("booked");
     const bookedTitle = document.getElementById("booked-title");
@@ -438,6 +443,8 @@
     }
 
     async function checkRate(cartId, rateId) {
+      selectedRoom = null;
+      bookButton.hidden = bookNote.hidden = true;
       selectionStatus.className = "status";
       selectionStatus.textContent = "Confirming the price and terms…";
       selectionDetails.innerHTML = "";
@@ -451,27 +458,18 @@
         });
         const rate = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(rate.error || `Couldn't confirm this room (${response.status}).`);
-        selectionStatus.textContent = "Price and terms confirmed. Booking is the next step.";
+        selectionStatus.textContent = "Price and terms confirmed.";
         renderSelection(rate);
+        selectedRoom = { cartId, rateId };
+        bookButton.hidden = bookNote.hidden = false;
       } catch (error) {
         selectionStatus.className = "status error";
         selectionStatus.textContent = error.message;
       }
     }
 
-    function renderSelection(rate) {
-      const refundableUntil = rate.cancellations.find(cancellation => cancellation.refundable)?.valid_until;
-      const payments = rate.deposits.map(deposit =>
-        [formatMoney(deposit.deposit_amount, deposit.deposit_currency), deposit.deposit_date].filter(Boolean).join(" on ")
-      );
-      const rows = [
-        ["Room", rate.room_description],
-        ["Total", formatMoney(rate.price.total, rate.price.currency)],
-        ["Cancellation", rate.is_refundable ? (refundableUntil ? `Refundable until ${refundableUntil}` : "Refundable") : "Non-refundable"],
-        ["Payments", payments.join(", ")],
-        ["Check-in", rate.check_in?.slice(0, 5)],
-        ["Check-out", rate.check_out?.slice(0, 5)]
-      ];
+    function renderDetails(rows) {
+      selectionDetails.innerHTML = "";
       for (const [label, value] of rows) {
         if (!value) continue;
         const row = el("div");
@@ -479,6 +477,57 @@
         row.appendChild(el("dd", null, String(value)));
         selectionDetails.appendChild(row);
       }
+    }
+
+    async function bookRoom() {
+      const user = currentUser();
+      if (!selectedRoom || !user) return;
+      bookButton.disabled = true;
+      selectionStatus.className = "status";
+      selectionStatus.textContent = "Booking your room…";
+
+      try {
+        const response = await fetch(`${WORKER_URL}/carts/${encodeURIComponent(selectedRoom.cartId)}/bookings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rate_id: selectedRoom.rateId, user_id: user.id })
+        });
+        const booking = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(booking.error || `Couldn't book this room (${response.status}).`);
+        selectedRoom = null;
+        bookButton.hidden = bookNote.hidden = true;
+        selectionStatus.textContent = booking.status === "Pending" ? "Booking submitted. The hotel is confirming your stay." : "You're booked!";
+        renderDetails([
+          ["Confirmation", booking.confirmation_number],
+          ["Status", booking.status],
+          ["Check-in", booking.arrival],
+          ["Check-out", booking.departure],
+          ["Guests", booking.number_of_adults],
+          ["Booking ref", booking.id]
+        ]);
+      } catch (error) {
+        selectionStatus.className = "status error";
+        selectionStatus.textContent = error.message;
+      } finally {
+        bookButton.disabled = false;
+      }
+    }
+
+    bookButton.addEventListener("click", bookRoom);
+
+    function renderSelection(rate) {
+      const refundableUntil = rate.cancellations.find(cancellation => cancellation.refundable)?.valid_until;
+      const payments = rate.deposits.map(deposit =>
+        [formatMoney(deposit.deposit_amount, deposit.deposit_currency), deposit.deposit_date].filter(Boolean).join(" on ")
+      );
+      renderDetails([
+        ["Room", rate.room_description],
+        ["Total", formatMoney(rate.price.total, rate.price.currency)],
+        ["Cancellation", rate.is_refundable ? (refundableUntil ? `Refundable until ${refundableUntil}` : "Refundable") : "Non-refundable"],
+        ["Payments", payments.join(", ")],
+        ["Check-in", rate.check_in?.slice(0, 5)],
+        ["Check-out", rate.check_out?.slice(0, 5)]
+      ]);
     }
 
     let pendingBooking = null;

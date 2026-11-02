@@ -15,6 +15,7 @@ const MAX_SEARCH_LENGTH = 128;
 const UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const HOTEL_ROOMS_PATH = new RegExp(`^/hotels/(${UUID_PATTERN})/rooms$`);
 const RATE_CHECK_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/rate-checks$`);
+const BOOKING_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/bookings$`);
 const MAX_RATE_ID_LENGTH = 256;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_ADULTS = 9;
@@ -160,6 +161,25 @@ async function checkForaRate(env, cartId, rateId) {
   return response.json();
 }
 
+async function bookForaRoom(env, cartId, rateId, user) {
+  const { access_token } = await getForaToken(env);
+  const response = await fetch(`${env.FORA_API_BASE}/published/carts/${cartId}/bookings/`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rate_id: rateId,
+      client_id: user.fora_client_id,
+      client_card_id: env.FORA_TEST_CARD_ID,
+      confirmation_email: user.email
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Fora booking failed (${response.status}): ${await response.text()}`);
+  }
+
+  return response.json();
+}
+
 function parseStay(body) {
   const start = typeof body?.start === "string" ? body.start : "";
   const end = typeof body?.end === "string" ? body.end : "";
@@ -278,6 +298,25 @@ export default {
       } catch (err) {
         console.error(err);
         return json({ error: "We couldn't confirm this room right now." }, 502, env);
+      }
+    }
+
+    const bookingMatch = pathname.match(BOOKING_PATH);
+    if (request.method === "POST" && bookingMatch) {
+      const body = await request.json().catch(() => null);
+      const rateId = typeof body?.rate_id === "string" ? body.rate_id : "";
+      const userId = typeof body?.user_id === "string" ? body.user_id : "";
+      if (!rateId || rateId.length > MAX_RATE_ID_LENGTH || !userId) {
+        return json({ error: "Choose a room and log in first." }, 400, env);
+      }
+      const user = await env.USERS.get(`${USER_KEY_PREFIX}${userId}`, "json");
+      if (!user?.fora_client_id) return json({ error: "Log in again to book." }, 400, env);
+
+      try {
+        return json(await bookForaRoom(env, bookingMatch[1], rateId, user), 201, env);
+      } catch (err) {
+        console.error(err);
+        return json({ error: "We couldn't book this room. Please try again." }, 502, env);
       }
     }
 
