@@ -79,6 +79,8 @@
     .room-price { font-weight: 600; }
     .room .card-book { margin-top: 0; }
     .selection h4 { font-family: Fraunces, Georgia, serif; font-size: 18px; margin: 0 0 4px; }
+    .card-picker { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+    .card-picker select { padding: 10px 12px; font: inherit; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
     .back-link { background: none; border: 0; padding: 0; margin-bottom: 12px; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
     .room-group { padding: 14px 0; border-bottom: 1px solid var(--line); }
     .room-group:last-child { border-bottom: 0; }
@@ -208,7 +210,11 @@
             <h4>Your room</h4>
             <p id="selection-status" class="status"></p>
             <dl id="selection-details" class="booked-details"></dl>
-            <p id="book-note" class="status" hidden>Paying with the card on file.</p>
+            <p id="book-note" class="status" hidden></p>
+            <div id="card-picker" class="card-picker" hidden>
+              <label for="card-select">Pay with</label>
+              <select id="card-select"></select>
+            </div>
             <button id="book-room" class="card-book" type="button" hidden>Book this room</button>
           </div>
         </section>
@@ -328,6 +334,8 @@
     const selectionDetails = document.getElementById("selection-details");
     const bookButton = document.getElementById("book-room");
     const bookNote = document.getElementById("book-note");
+    const cardPicker = document.getElementById("card-picker");
+    const cardSelect = document.getElementById("card-select");
     let selectedRoom = null;
     const checkoutHeading = document.getElementById("checkout-heading");
     const bookedEl = document.getElementById("booked");
@@ -444,7 +452,7 @@
 
     async function checkRate(cartId, rateId) {
       selectedRoom = null;
-      bookButton.hidden = bookNote.hidden = true;
+      bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
       selectionStatus.className = "status";
       selectionStatus.textContent = "Confirming the price and terms…";
       selectionDetails.innerHTML = "";
@@ -461,7 +469,7 @@
         selectionStatus.textContent = "Price and terms confirmed.";
         renderSelection(rate);
         selectedRoom = { cartId, rateId };
-        bookButton.hidden = bookNote.hidden = false;
+        loadCards();
       } catch (error) {
         selectionStatus.className = "status error";
         selectionStatus.textContent = error.message;
@@ -479,6 +487,43 @@
       }
     }
 
+    function cardLabel(card) {
+      const name = card.nickname || card.brand.toUpperCase();
+      const expiry = card.expire_month && card.expire_year ? ` · exp ${String(card.expire_month).padStart(2, "0")}/${card.expire_year}` : "";
+      return `${name} •••• ${card.last_4}${expiry}${card.is_expired ? " (expired)" : ""}`;
+    }
+
+    async function loadCards() {
+      const user = currentUser();
+      bookNote.hidden = false;
+      bookNote.className = "status";
+      bookNote.textContent = "Loading your saved cards…";
+
+      try {
+        const response = await fetch(`${WORKER_URL}/users/${encodeURIComponent(user.id)}/cards`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Couldn't load your cards (${response.status}).`);
+
+        cardSelect.innerHTML = "";
+        for (const card of data.cards) {
+          const option = new Option(cardLabel(card), card.id);
+          option.disabled = card.is_expired;
+          cardSelect.append(option);
+        }
+        const usable = data.cards.find(card => !card.is_expired);
+        if (!usable) {
+          bookNote.textContent = "No usable saved card yet. Ask your advisor to add one.";
+          return;
+        }
+        cardSelect.value = usable.id;
+        bookNote.hidden = true;
+        cardPicker.hidden = bookButton.hidden = false;
+      } catch (error) {
+        bookNote.className = "status error";
+        bookNote.textContent = error.message;
+      }
+    }
+
     async function bookRoom() {
       const user = currentUser();
       if (!selectedRoom || !user) return;
@@ -490,12 +535,12 @@
         const response = await fetch(`${WORKER_URL}/carts/${encodeURIComponent(selectedRoom.cartId)}/bookings`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rate_id: selectedRoom.rateId, user_id: user.id })
+          body: JSON.stringify({ rate_id: selectedRoom.rateId, user_id: user.id, card_id: cardSelect.value })
         });
         const booking = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(booking.error || `Couldn't book this room (${response.status}).`);
         selectedRoom = null;
-        bookButton.hidden = bookNote.hidden = true;
+        bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
         selectionStatus.textContent = booking.status === "Pending" ? "Booking submitted. The hotel is confirming your stay." : "You're booked!";
         renderDetails([
           ["Confirmation", booking.confirmation_number],
