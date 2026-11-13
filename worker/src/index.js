@@ -17,6 +17,8 @@ const HOTEL_ROOMS_PATH = new RegExp(`^/hotels/(${UUID_PATTERN})/rooms$`);
 const RATE_CHECK_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/rate-checks$`);
 const BOOKING_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/bookings$`);
 const USER_CARDS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards$`);
+const USER_CARD_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards/(${UUID_PATTERN})$`);
+const FORA_API_VERSION = "1";
 const CARD_ID_PATTERN = new RegExp(`^${UUID_PATTERN}$`);
 const MAX_RATE_ID_LENGTH = 256;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -169,8 +171,8 @@ async function checkForaRate(env, cartId, rateId) {
 
 async function fetchForaCards(env, clientId) {
   const { access_token } = await getForaToken(env);
-  const response = await fetch(`${env.FORA_API_BASE}/published/clients/${clientId}/cards/`, {
-    headers: { Authorization: `Bearer ${access_token}` }
+  const response = await fetch(`${env.FORA_API_BASE}/contacts/${clientId}/cards/`, {
+    headers: { Authorization: `Bearer ${access_token}`, "Fora-Api-Version": FORA_API_VERSION }
   });
   if (!response.ok) {
     throw new Error(`Fora cards request failed (${response.status}): ${await response.text()}`);
@@ -178,6 +180,54 @@ async function fetchForaCards(env, clientId) {
 
   const { cards } = await response.json();
   return cards;
+}
+
+async function postForaJson(env, path, body) {
+  const { access_token } = await getForaToken(env);
+  const response = await fetch(`${env.FORA_API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${access_token}`,
+      "Content-Type": "application/json",
+      "Fora-Api-Version": FORA_API_VERSION
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json().catch(() => ({}));
+  return { status: response.status, ok: response.ok, data };
+}
+
+function startForaCard(env, clientId) {
+  return postForaJson(env, `/contacts/${clientId}/cards/`, { origin: env.ALLOWED_ORIGIN });
+}
+
+function saveForaCard(env, clientId, cardId, card) {
+  const address = card?.billing_address ?? {};
+  return postForaJson(env, `/contacts/${clientId}/cards/${cardId}/`, {
+    number_token: card?.number_token,
+    cvv_token: card?.cvv_token,
+    first_six: card?.first_six,
+    last_four: card?.last_four,
+    card_type: card?.card_type,
+    holder_name: card?.holder_name,
+    expiry_month: card?.expiry_month,
+    expiry_year: card?.expiry_year,
+    billing_address: {
+      line_1: address.line_1,
+      ...(address.line_2 ? { line_2: address.line_2 } : {}),
+      city: address.city,
+      ...(address.state ? { state: address.state } : {}),
+      postal_code: address.postal_code,
+      country: address.country
+    }
+  });
+}
+
+function foraResult(result, env, failure) {
+  if (result.ok) return json(result.data, result.status, env);
+  console.error(`${failure} (${result.status}): ${JSON.stringify(result.data)}`);
+  if (result.status >= 500) return json({ error: failure }, 502, env);
+  return json({ error: failure, fora: result.data }, result.status, env);
 }
 
 async function bookForaRoom(env, cartId, rateId, cardId, user) {
@@ -330,6 +380,36 @@ export default {
       } catch (err) {
         console.error(err);
         return json({ error: "We couldn't load your saved cards." }, 502, env);
+      }
+    }
+
+    if (request.method === "POST" && userCardsMatch) {
+      const user = await env.USERS.get(`${USER_KEY_PREFIX}${userCardsMatch[1]}`, "json");
+      if (!user?.fora_client_id) return json({ error: "Log in again to add a card." }, 404, env);
+
+      try {
+        return foraResult(await startForaCard(env, user.fora_client_id), env, "We couldn't start adding your card.");
+      } catch (err) {
+        console.error(err);
+        return json({ error: "We couldn't start adding your card." }, 502, env);
+      }
+    }
+
+    const userCardMatch = pathname.match(USER_CARD_PATH);
+    if (request.method === "POST" && userCardMatch) {
+      const user = await env.USERS.get(`${USER_KEY_PREFIX}${userCardMatch[1]}`, "json");
+      if (!user?.fora_client_id) return json({ error: "Log in again to add a card." }, 404, env);
+      const card = await request.json().catch(() => null);
+
+      try {
+        return foraResult(
+          await saveForaCard(env, user.fora_client_id, userCardMatch[2], card),
+          env,
+          "We couldn't save your card."
+        );
+      } catch (err) {
+        console.error(err);
+        return json({ error: "We couldn't save your card." }, 502, env);
       }
     }
 
