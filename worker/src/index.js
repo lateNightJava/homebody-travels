@@ -51,7 +51,7 @@ async function requestForaToken(env) {
     .setJti(crypto.randomUUID())
     .sign(privateKey);
 
-  const response = await fetch(`${env.FORA_API_BASE}/v1/auth/app-token/`, {
+  const response = await fetch(`${env.FORA_API_BASE}/auth/app-token/`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -84,14 +84,18 @@ async function getForaToken(env) {
 
 async function createForaClient(env, { firstName, lastName, email, phone }) {
   const { access_token } = await getForaToken(env);
-  const response = await fetch(`${env.FORA_API_BASE}/published/clients/`, {
+  const response = await fetch(`${env.FORA_API_BASE}/contacts/`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${access_token}`,
+      "Content-Type": "application/json",
+      "Fora-Api-Version": "1"
+    },
     body: JSON.stringify({
       first_name: firstName,
       last_name: lastName,
-      emails: [{ email, email_type: "personal" }],
-      phone_numbers: [{ phone_number: phone, number_type: "mobile" }]
+      emails: [{ address: email, type: "personal" }],
+      phone_numbers: [{ number: phone, type: "mobile" }]
     })
   });
   if (!response.ok) {
