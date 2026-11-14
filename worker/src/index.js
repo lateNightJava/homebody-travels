@@ -18,6 +18,8 @@ const RATE_CHECK_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/rate-checks$`);
 const BOOKING_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/bookings$`);
 const USER_CARDS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards$`);
 const USER_CARD_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards/(${UUID_PATTERN})$`);
+const USER_BOOKINGS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/bookings$`);
+const MAX_LISTED_BOOKINGS = 20;
 const FORA_API_VERSION = "1";
 const CARD_ID_PATTERN = new RegExp(`^${UUID_PATTERN}$`);
 const MAX_RATE_ID_LENGTH = 256;
@@ -261,6 +263,33 @@ async function bookForaRoom(env, cartId, { rateId, programId, cardId }, user) {
   return result;
 }
 
+function bookingSummary(booking) {
+  return {
+    id: booking.id,
+    hotel: booking.supplier?.name ?? "",
+    arrival: booking.arrival,
+    departure: booking.departure,
+    status: booking.status ?? "Pending",
+    confirmation_number: booking.confirmation_number ?? null
+  };
+}
+
+async function rememberBooking(env, user, booking) {
+  const bookings = [bookingSummary(booking), ...(user.bookings ?? [])];
+  await env.USERS.put(`${USER_KEY_PREFIX}${user.id}`, JSON.stringify({ ...user, bookings }), {
+    metadata: { first_name: user.first_name, last_name: user.last_name }
+  });
+}
+
+async function refreshBooking(env, stored) {
+  const { access_token } = await getForaToken(env);
+  const response = await fetch(`${env.FORA_API_BASE}/bookings/${stored.id}/`, {
+    headers: { Authorization: `Bearer ${access_token}`, "Fora-Api-Version": FORA_API_VERSION }
+  });
+  if (!response.ok) return stored;
+  return bookingSummary(await response.json());
+}
+
 function parseStay(body) {
   const start = typeof body?.start === "string" ? body.start : "";
   const end = typeof body?.end === "string" ? body.end : "";
@@ -441,15 +470,22 @@ export default {
       if (!user?.fora_client_id) return json({ error: "Log in again to book." }, 400, env);
 
       try {
-        return foraResult(
-          await bookForaRoom(env, bookingMatch[1], { rateId, programId, cardId }, user),
-          env,
-          "We couldn't book this room."
-        );
+        const result = await bookForaRoom(env, bookingMatch[1], { rateId, programId, cardId }, user);
+        if (result.ok) await rememberBooking(env, user, result.data);
+        return foraResult(result, env, "We couldn't book this room.");
       } catch (err) {
         console.error(err);
         return json({ error: "We couldn't book this room. Please try again." }, 502, env);
       }
+    }
+
+    const userBookingsMatch = pathname.match(USER_BOOKINGS_PATH);
+    if (request.method === "GET" && userBookingsMatch) {
+      const user = await env.USERS.get(`${USER_KEY_PREFIX}${userBookingsMatch[1]}`, "json");
+      if (!user) return json({ error: "Log in again to see your bookings." }, 404, env);
+      const stored = (user.bookings ?? []).slice(0, MAX_LISTED_BOOKINGS);
+      const bookings = await Promise.all(stored.map(booking => refreshBooking(env, booking).catch(() => booking)));
+      return json({ bookings }, 200, env);
     }
 
     if (request.method === "GET" && pathname === "/fora/token-status") {

@@ -219,6 +219,11 @@
             <button id="save-card" type="submit">Save card</button>
           </form>
         </section>
+        <section class="cards-panel">
+          <h3>Your bookings</h3>
+          <ul id="bookings-list" class="saved-cards"></ul>
+          <p id="bookings-status" class="status"></p>
+        </section>
         <form id="search-form" class="search-bar">
           <input id="query" placeholder="Where to? e.g. Lisbon" required>
           <input id="check-in" type="date" aria-label="Check-in" required>
@@ -615,6 +620,7 @@
         if (!response.ok) throw new Error(booking.fora?.error?.message || booking.error || `Couldn't book this room (${response.status}).`);
         selectedRoom = null;
         closeCheckoutCard();
+        loadBookings();
         bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
         selectionStatus.textContent = booking.status === "Pending" ? "Booking submitted. The hotel is confirming your stay." : "You're booked!";
         renderDetails([
@@ -760,6 +766,34 @@
       loginEl.hidden = true;
       searchEl.hidden = false;
       loadSavedCards();
+      loadBookings();
+    }
+
+    const bookingsListEl = document.getElementById("bookings-list");
+    const bookingsStatus = document.getElementById("bookings-status");
+
+    async function loadBookings() {
+      const user = currentUser();
+      if (!user) return;
+      bookingsStatus.className = "status";
+      bookingsStatus.textContent = "Loading your bookings…";
+      try {
+        const { bookings } = await workerJson(`/users/${encodeURIComponent(user.id)}/bookings`);
+        bookingsListEl.innerHTML = "";
+        for (const booking of bookings) {
+          const parts = [
+            booking.hotel || "Hotel",
+            `${booking.arrival} → ${booking.departure}`,
+            booking.status,
+            booking.confirmation_number ? `Conf ${booking.confirmation_number}` : null
+          ];
+          bookingsListEl.appendChild(el("li", null, parts.filter(Boolean).join(" · ")));
+        }
+        bookingsStatus.textContent = bookings.length ? "" : "No bookings yet.";
+      } catch (error) {
+        bookingsStatus.className = "status error";
+        bookingsStatus.textContent = error.message;
+      }
     }
 
     const savedCardsEl = document.getElementById("saved-cards");
