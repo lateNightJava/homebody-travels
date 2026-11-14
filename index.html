@@ -251,6 +251,24 @@
               <label for="card-select">Pay with</label>
               <select id="card-select"></select>
             </div>
+            <form id="checkout-card-form" class="card-form" hidden>
+              <input name="holder_name" placeholder="Name on card" autocomplete="cc-name" required>
+              <div id="tokenex-checkout-number" class="tokenex-field"></div>
+              <div class="card-form-row">
+                <div id="tokenex-checkout-cvv" class="tokenex-field"></div>
+                <input name="expiry" placeholder="MM/YYYY" autocomplete="cc-exp" pattern="(0[1-9]|1[0-2])/20[0-9]{2}" required>
+              </div>
+              <input name="line_1" placeholder="Billing address" autocomplete="address-line1" required>
+              <div class="card-form-row">
+                <input name="city" placeholder="City" autocomplete="address-level2" required>
+                <input name="state" placeholder="State" autocomplete="address-level1">
+              </div>
+              <div class="card-form-row">
+                <input name="postal_code" placeholder="Postal code" autocomplete="postal-code" required>
+                <input name="country" placeholder="Country code, e.g. US" value="US" maxlength="2" required>
+              </div>
+              <p class="status">Your card is saved securely to your travel profile for this booking and future ones.</p>
+            </form>
             <button id="book-room" class="card-book" type="button" hidden>Book this room</button>
           </div>
         </section>
@@ -489,6 +507,7 @@
 
     async function checkRate(cartId, rateId, programId) {
       selectedRoom = null;
+      closeCheckoutCard();
       bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
       selectionStatus.className = "status";
       selectionStatus.textContent = "Confirming the price and terms…";
@@ -535,7 +554,7 @@
       return `${name} •••• ${card.last_4}${expiry}${isExpiredCard(card) ? " (expired)" : ""}`;
     }
 
-    async function loadCards() {
+    async function loadCards(selectId) {
       const user = currentUser();
       bookNote.hidden = false;
       bookNote.className = "status";
@@ -552,14 +571,12 @@
           option.disabled = isExpiredCard(card);
           cardSelect.append(option);
         }
-        const usable = data.cards.find(card => !isExpiredCard(card));
-        if (!usable) {
-          bookNote.textContent = "No usable saved card yet. Ask your advisor to add one.";
-          return;
-        }
-        cardSelect.value = usable.id;
+        cardSelect.append(new Option("Use a new card", NEW_CARD));
+        const usable = data.cards.find(card => card.id === selectId) ?? data.cards.find(card => !isExpiredCard(card));
+        cardSelect.value = usable ? usable.id : NEW_CARD;
         bookNote.hidden = true;
         cardPicker.hidden = bookButton.hidden = false;
+        if (!usable) openCheckoutCard();
       } catch (error) {
         bookNote.className = "status error";
         bookNote.textContent = error.message;
@@ -569,11 +586,21 @@
     async function bookRoom() {
       const user = currentUser();
       if (!selectedRoom || !user) return;
+      const usingNewCard = cardSelect.value === NEW_CARD;
+      if (usingNewCard && (!checkoutCapture || !checkoutCardForm.reportValidity())) return;
       bookButton.disabled = true;
       selectionStatus.className = "status";
-      selectionStatus.textContent = "Booking your room…";
 
       try {
+        let cardId = cardSelect.value;
+        if (usingNewCard) {
+          selectionStatus.textContent = "Saving your card…";
+          const saved = await saveCapturedCard(checkoutCapture, checkoutCardForm);
+          closeCheckoutCard();
+          cardId = saved.id;
+          await Promise.all([loadCards(cardId), loadSavedCards()]);
+        }
+        selectionStatus.textContent = "Booking your room…";
         const response = await fetch(`${WORKER_URL}/carts/${encodeURIComponent(selectedRoom.cartId)}/bookings`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -581,12 +608,13 @@
             rate_id: selectedRoom.rateId,
             program_id: selectedRoom.programId,
             user_id: user.id,
-            card_id: cardSelect.value
+            card_id: cardId
           })
         });
         const booking = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(booking.fora?.error?.message || booking.error || `Couldn't book this room (${response.status}).`);
         selectedRoom = null;
+        closeCheckoutCard();
         bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
         selectionStatus.textContent = booking.status === "Pending" ? "Booking submitted. The hotel is confirming your stay." : "You're booked!";
         renderDetails([
@@ -599,13 +627,14 @@
         ]);
       } catch (error) {
         selectionStatus.className = "status error";
-        selectionStatus.textContent = error.message;
+        selectionStatus.textContent = error instanceof Error ? error.message : JSON.stringify(error);
       } finally {
         bookButton.disabled = false;
       }
     }
 
     bookButton.addEventListener("click", bookRoom);
+    cardSelect.addEventListener("change", () => (cardSelect.value === NEW_CARD ? openCheckoutCard() : closeCheckoutCard()));
 
     function renderSelection(rate) {
       const refundableUntil = rate.cancellations.find(cancellation => cancellation.refundable)?.valid_until;
@@ -738,7 +767,10 @@
     const addCardButton = document.getElementById("add-card");
     const cardForm = document.getElementById("card-form");
     const saveCardButton = document.getElementById("save-card");
+    const checkoutCardForm = document.getElementById("checkout-card-form");
+    const NEW_CARD = "new";
     let cardCapture = null;
+    let checkoutCapture = null;
 
     function showCardsError(error) {
       cardsStatus.className = "status error";
@@ -792,36 +824,105 @@
       });
     }
 
+    function removeCapture(capture) {
+      capture?.number.remove();
+      capture?.cvv.remove();
+    }
+
     function removeCardCapture() {
-      cardCapture?.number.remove();
-      cardCapture?.cvv.remove();
+      removeCapture(cardCapture);
       cardCapture = null;
     }
 
-    addCardButton.addEventListener("click", async () => {
+    async function startCardCapture(numberContainerId, cvvContainerId, onFieldError) {
       const user = currentUser();
+      const form = await workerJson(`/users/${encodeURIComponent(user.id)}/cards`, { method: "POST" });
+      const number = tokenexFrame(numberContainerId, form.tokenex, form.tokenex.number_auth_key, form.tokenex.number_token_scheme, {
+        pci: true,
+        cvv: false,
+        placeholder: "Card number"
+      });
+      const cvv = tokenexFrame(cvvContainerId, form.tokenex, form.tokenex.cvv_auth_key, form.tokenex.cvv_token_scheme, {
+        pci: false,
+        placeholder: "CVV",
+        customRegEx: "^\\d{3,4}$",
+        inputMaxLength: 4
+      });
+      for (const frame of [number, cvv]) {
+        frame.on("error", data => onFieldError(new Error(`TokenEx refused the field: ${JSON.stringify(data)}`)));
+        frame.load();
+      }
+      return { cardId: form.id, number, cvv };
+    }
+
+    async function saveCapturedCard(capture, formEl) {
+      const user = currentUser();
+      const values = Object.fromEntries(new FormData(formEl));
+      const [month, year] = values.expiry.split("/").map(Number);
+      const [number, cvv] = await Promise.all([tokenized(capture.number), tokenized(capture.cvv)]);
+      return workerJson(`/users/${encodeURIComponent(user.id)}/cards/${capture.cardId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          number_token: number.token,
+          cvv_token: cvv.token,
+          first_six: number.firstSix,
+          last_four: number.lastFour,
+          card_type: number.cardType,
+          holder_name: values.holder_name,
+          expiry_month: month,
+          expiry_year: year,
+          billing_address: {
+            line_1: values.line_1,
+            city: values.city,
+            state: values.state,
+            postal_code: values.postal_code,
+            country: values.country.toUpperCase()
+          }
+        })
+      });
+    }
+
+    function showBookNoteError(error) {
+      bookNote.hidden = false;
+      bookNote.className = "status error";
+      bookNote.textContent = error.message;
+    }
+
+    function closeCheckoutCard() {
+      removeCapture(checkoutCapture);
+      checkoutCapture = null;
+      checkoutCardForm.reset();
+      checkoutCardForm.hidden = true;
+    }
+
+    async function openCheckoutCard() {
+      removeCardCapture();
+      cardForm.hidden = true;
+      addCardButton.hidden = false;
+      bookButton.disabled = true;
+      bookNote.hidden = false;
+      bookNote.className = "status";
+      bookNote.textContent = "Starting a secure card form…";
+      try {
+        checkoutCapture = await startCardCapture("tokenex-checkout-number", "tokenex-checkout-cvv", showBookNoteError);
+        checkoutCardForm.hidden = false;
+        bookNote.hidden = true;
+      } catch (error) {
+        showBookNoteError(error);
+      } finally {
+        bookButton.disabled = false;
+      }
+    }
+
+    addCardButton.addEventListener("click", async () => {
       addCardButton.disabled = true;
       cardsStatus.className = "status";
       cardsStatus.textContent = "Starting a secure card form…";
       try {
-        const form = await workerJson(`/users/${encodeURIComponent(user.id)}/cards`, { method: "POST" });
+        closeCheckoutCard();
         removeCardCapture();
-        const number = tokenexFrame("tokenex-number", form.tokenex, form.tokenex.number_auth_key, form.tokenex.number_token_scheme, {
-          pci: true,
-          cvv: false,
-          placeholder: "Card number"
-        });
-        const cvv = tokenexFrame("tokenex-cvv", form.tokenex, form.tokenex.cvv_auth_key, form.tokenex.cvv_token_scheme, {
-          pci: false,
-          placeholder: "CVV",
-          customRegEx: "^\\d{3,4}$",
-          inputMaxLength: 4
-        });
-        for (const frame of [number, cvv]) {
-          frame.on("error", data => showCardsError(new Error(`TokenEx refused the field: ${JSON.stringify(data)}`)));
-          frame.load();
-        }
-        cardCapture = { cardId: form.id, number, cvv };
+        cardCapture = await startCardCapture("tokenex-number", "tokenex-cvv", showCardsError);
         cardForm.hidden = false;
         addCardButton.hidden = true;
         cardsStatus.textContent = "";
@@ -835,36 +936,12 @@
     cardForm.addEventListener("submit", async event => {
       event.preventDefault();
       if (!cardCapture) return;
-      const user = currentUser();
-      const values = Object.fromEntries(new FormData(cardForm));
-      const [month, year] = values.expiry.split("/").map(Number);
 
       saveCardButton.disabled = true;
       cardsStatus.className = "status";
       cardsStatus.textContent = "Saving your card…";
       try {
-        const [number, cvv] = await Promise.all([tokenized(cardCapture.number), tokenized(cardCapture.cvv)]);
-        await workerJson(`/users/${encodeURIComponent(user.id)}/cards/${cardCapture.cardId}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            number_token: number.token,
-            cvv_token: cvv.token,
-            first_six: number.firstSix,
-            last_four: number.lastFour,
-            card_type: number.cardType,
-            holder_name: values.holder_name,
-            expiry_month: month,
-            expiry_year: year,
-            billing_address: {
-              line_1: values.line_1,
-              city: values.city,
-              state: values.state,
-              postal_code: values.postal_code,
-              country: values.country.toUpperCase()
-            }
-          })
-        });
+        await saveCapturedCard(cardCapture, cardForm);
         removeCardCapture();
         cardForm.reset();
         cardForm.hidden = true;
