@@ -115,6 +115,15 @@
     .cards-panel h3 { font-family: Fraunces, Georgia, serif; font-size: 20px; margin: 0 0 8px; }
     .saved-cards { list-style: none; margin: 0 0 12px; padding: 0; }
     .saved-cards li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .bookings { list-style: none; margin: 0 0 4px; padding: 0; }
+    .booking-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+    .booking-row:last-child { border-bottom: 0; }
+    .booking-name { font-weight: 600; }
+    .booking-meta { color: var(--muted); font-size: 14px; }
+    .booking-status { flex: none; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; background: #efe7dc; color: var(--muted); }
+    .booking-status.is-booked { background: #e3f1e6; color: #2f6b3d; }
+    .booking-status.is-pending { background: #fbefd9; color: #8a5a12; }
+    .booking-status.is-canceled { background: #f3e1dc; color: #9a3b26; }
     .card-form { display: grid; gap: 10px; margin-top: 12px; }
     .card-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .card-form input, .tokenex-field { width: 100%; height: 44px; padding: 0 12px; font: inherit; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
@@ -221,7 +230,7 @@
         </section>
         <section class="cards-panel">
           <h3>Your bookings</h3>
-          <ul id="bookings-list" class="saved-cards"></ul>
+          <ul id="bookings-list" class="bookings"></ul>
           <p id="bookings-status" class="status"></p>
         </section>
         <form id="search-form" class="search-bar">
@@ -772,6 +781,33 @@
     const bookingsListEl = document.getElementById("bookings-list");
     const bookingsStatus = document.getElementById("bookings-status");
 
+    function formatStay(arrival, departure) {
+      if (!arrival || !departure) return "";
+      const start = new Date(`${arrival}T00:00:00`);
+      const end = new Date(`${departure}T00:00:00`);
+      const nights = Math.round((end - start) / 86400000);
+      const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
+      const startText = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const endText = sameMonth
+        ? `${end.getDate()}, ${end.getFullYear()}`
+        : end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      return `${startText} – ${endText} · ${nights} night${nights === 1 ? "" : "s"}`;
+    }
+
+    function renderBooking(booking) {
+      const row = el("li", "booking-row");
+      const info = el("div");
+      info.appendChild(el("div", "booking-name", booking.hotel || "Hotel booking"));
+      info.appendChild(el("div", "booking-meta", formatStay(booking.arrival, booking.departure)));
+      if (booking.confirmation_number) {
+        info.appendChild(el("div", "booking-meta", `Confirmation ${booking.confirmation_number}`));
+      }
+      row.appendChild(info);
+      const status = booking.status || "Pending";
+      row.appendChild(el("span", `booking-status is-${status.toLowerCase()}`, status));
+      return row;
+    }
+
     async function loadBookings() {
       const user = currentUser();
       if (!user) return;
@@ -780,15 +816,7 @@
       try {
         const { bookings } = await workerJson(`/users/${encodeURIComponent(user.id)}/bookings`);
         bookingsListEl.innerHTML = "";
-        for (const booking of bookings) {
-          const parts = [
-            booking.hotel || "Hotel",
-            `${booking.arrival} → ${booking.departure}`,
-            booking.status,
-            booking.confirmation_number ? `Conf ${booking.confirmation_number}` : null
-          ];
-          bookingsListEl.appendChild(el("li", null, parts.filter(Boolean).join(" · ")));
-        }
+        for (const booking of bookings) bookingsListEl.appendChild(renderBooking(booking));
         bookingsStatus.textContent = bookings.length ? "" : "No bookings yet.";
       } catch (error) {
         bookingsStatus.className = "status error";
