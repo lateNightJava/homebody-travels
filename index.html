@@ -481,13 +481,13 @@
       side.appendChild(el("span", "room-price", formatMoney(rate.price.total, rate.price.currency)));
       const select = el("button", "card-book", "Select");
       select.type = "button";
-      select.addEventListener("click", () => checkRate(cartId, rate.id));
+      select.addEventListener("click", () => checkRate(cartId, rate.id, rate.program_id));
       side.appendChild(select);
       row.appendChild(side);
       return row;
     }
 
-    async function checkRate(cartId, rateId) {
+    async function checkRate(cartId, rateId, programId) {
       selectedRoom = null;
       bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
       selectionStatus.className = "status";
@@ -499,13 +499,13 @@
         const response = await fetch(`${WORKER_URL}/carts/${encodeURIComponent(cartId)}/rate-checks`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rate_id: rateId })
+          body: JSON.stringify({ rate_id: rateId, program_id: programId })
         });
         const rate = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(rate.error || `Couldn't confirm this room (${response.status}).`);
         selectionStatus.textContent = "Price and terms confirmed.";
         renderSelection(rate);
-        selectedRoom = { cartId, rateId };
+        selectedRoom = { cartId, rateId, programId };
         loadCards();
       } catch (error) {
         selectionStatus.className = "status error";
@@ -577,10 +577,15 @@
         const response = await fetch(`${WORKER_URL}/carts/${encodeURIComponent(selectedRoom.cartId)}/bookings`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rate_id: selectedRoom.rateId, user_id: user.id, card_id: cardSelect.value })
+          body: JSON.stringify({
+            rate_id: selectedRoom.rateId,
+            program_id: selectedRoom.programId,
+            user_id: user.id,
+            card_id: cardSelect.value
+          })
         });
         const booking = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(booking.error || `Couldn't book this room (${response.status}).`);
+        if (!response.ok) throw new Error(booking.fora?.error?.message || booking.error || `Couldn't book this room (${response.status}).`);
         selectedRoom = null;
         bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
         selectionStatus.textContent = booking.status === "Pending" ? "Booking submitted. The hotel is confirming your stay." : "You're booked!";
@@ -812,8 +817,10 @@
           customRegEx: "^\\d{3,4}$",
           inputMaxLength: 4
         });
-        number.load();
-        cvv.load();
+        for (const frame of [number, cvv]) {
+          frame.on("error", data => showCardsError(new Error(`TokenEx refused the field: ${JSON.stringify(data)}`)));
+          frame.load();
+        }
         cardCapture = { cardId: form.id, number, cvv };
         cardForm.hidden = false;
         addCardButton.hidden = true;
