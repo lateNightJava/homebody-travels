@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Homebody Travels</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='32' fill='%23c2603a'/%3E%3Ctext x='32' y='44' font-family='Georgia,serif' font-size='34' font-weight='700' text-anchor='middle' fill='white'%3EH%3C/text%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -143,6 +144,14 @@
     .bookings { list-style: none; margin: 0 0 4px; padding: 0; }
     .booking-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
     .booking-row:last-child { border-bottom: 0; }
+    .bookings li { border-bottom: 1px solid var(--line); }
+    .bookings li:last-child { border-bottom: 0; }
+    .booking-link { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 12px 8px; margin: 0 -8px; border-radius: 10px; text-decoration: none; color: inherit; }
+    .booking-link:hover { background: var(--surface); }
+    .booking-status.is-failed { background: #f3e1dc; color: #9a3b26; }
+    .booking-status.is-completed, .booking-status.is-traveling { background: #e6ecf5; color: #2f4f7a; }
+    .empty { max-width: 640px; padding: 24px; border: 1px dashed var(--line); border-radius: 16px; }
+    .empty p { margin: 0 0 12px; color: var(--muted); }
     .booking-name { font-weight: 600; }
     .booking-meta { color: var(--muted); font-size: 14px; }
     .booking-status { flex: none; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; background: #efe7dc; color: var(--muted); }
@@ -158,6 +167,10 @@
     .card-form button:disabled { opacity: 0.6; cursor: progress; }
 
     footer { padding: 32px 0; color: var(--muted); font-size: 14px; }
+    footer.wrap { padding-top: 32px; padding-bottom: 32px; }
+    .book { min-height: 60vh; }
+    #trip-detail-view .back-link { display: inline-block; margin-bottom: 12px; }
+    #trip-details { max-width: 640px; }
     [hidden] { display: none !important; }
 
     @media (max-width: 760px) {
@@ -194,7 +207,7 @@
   </header>
 
   <main data-page="home">
-  <div class="wrap">
+  <div id="marketing" class="wrap">
 
     <section class="hero">
       <div>
@@ -285,12 +298,31 @@
 
   <main class="page" data-page="trips" hidden>
     <div class="wrap">
-      <h2>Your trips</h2>
-      <p class="lede">Every stay you've booked with us, newest first.</p>
-        <section class="cards-panel">
+      <div id="trips-list-view">
+        <h2>Your trips</h2>
+        <p class="lede">Every stay you've booked with us.</p>
+        <p id="bookings-status" class="status"></p>
+        <button id="bookings-retry" class="card-book" type="button" hidden>Try again</button>
+        <div id="trips-empty" class="empty" hidden>
+          <p>No trips yet. Your next stay is a search away.</p>
+          <a class="card-book" href="#/">Find your next stay</a>
+        </div>
+        <section id="trips-upcoming" class="cards-panel" hidden>
+          <h3>Upcoming</h3>
           <ul id="bookings-list" class="bookings"></ul>
-          <p id="bookings-status" class="status"></p>
         </section>
+        <section id="trips-past" class="cards-panel" hidden>
+          <h3>Past</h3>
+          <ul id="past-bookings-list" class="bookings"></ul>
+        </section>
+      </div>
+      <div id="trip-detail-view" hidden>
+        <a class="back-link" href="#/trips">← All trips</a>
+        <h2 id="trip-title">Your trip</h2>
+        <p id="trip-status" class="status"></p>
+        <button id="trip-retry" class="card-book" type="button" hidden>Try again</button>
+        <dl id="trip-details" class="booked-details"></dl>
+      </div>
     </div>
   </main>
 
@@ -301,6 +333,7 @@
         <section class="cards-panel">
           <ul id="saved-cards" class="saved-cards"></ul>
           <p id="cards-status" class="status"></p>
+          <button id="cards-retry" class="signout" type="button" hidden>Try again</button>
           <button id="add-card" class="card-book" type="button">Add a card</button>
           <form id="card-form" class="card-form" hidden>
             <input name="holder_name" placeholder="Name on card" autocomplete="cc-name" required>
@@ -409,7 +442,7 @@
     </div>
   </div>
 
-  <footer class="wrap">© Homebody Travels · Demo site</footer>
+  <footer class="wrap">© 2026 Homebody Travels · Hotel bookings powered by Fora · Demo site</footer>
 
   <script src="https://test-htp.tokenex.com/Iframe/iframe-v3.82.min.js"></script>
   <script>
@@ -498,7 +531,11 @@
     const navUserName = document.getElementById("nav-user-name");
     const signoutButton = document.getElementById("signout");
     const bookSection = document.getElementById("book");
+    const marketingEl = document.getElementById("marketing");
+    const tripsListView = document.getElementById("trips-list-view");
+    const tripDetailView = document.getElementById("trip-detail-view");
     const PAGES = ["home", "trips", "wallet", "checkout"];
+    const PAGE_TITLES = { trips: "Your trips", wallet: "Your wallet", checkout: "Checkout" };
 
     function currentPage() {
       const page = location.hash.replace(/^#\/?/, "").split("/")[0];
@@ -511,8 +548,12 @@
       if (page !== "home") roomsSearch += 1;
       for (const main of document.querySelectorAll("[data-page]")) main.hidden = main.dataset.page !== page;
       for (const link of navLinks.querySelectorAll("[data-nav]")) link.classList.toggle("active", link.dataset.nav === page);
+      const tripId = page === "trips" ? decodeURIComponent(location.hash.split("/")[2] ?? "") : "";
+      document.title = PAGE_TITLES[page] ? `${PAGE_TITLES[page]} · Homebody Travels` : "Homebody Travels";
       if (page === "home") loadOpenCheckout();
-      if (page === "trips") loadBookings();
+      if (page === "trips") tripId ? loadTrip(tripId) : loadBookings();
+      if (page === "trips") tripsListView.hidden = Boolean(tripId);
+      if (page === "trips") tripDetailView.hidden = !tripId;
       if (page === "wallet") loadSavedCards();
       if (page === "checkout") showCheckout(location.hash.split("/").slice(2).map(decodeURIComponent));
       window.scrollTo({ top: 0 });
@@ -825,9 +866,7 @@
     function cancellationText(rate) {
       const refundableUntil = rate.cancellations.find(cancellation => cancellation.refundable)?.valid_until;
       if (!rate.is_refundable) return "Non-refundable";
-      if (!refundableUntil) return "Refundable";
-      const date = new Date(`${refundableUntil.slice(0, 10)}T00:00:00`);
-      return `Free cancellation until ${date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+      return refundableUntil ? `Free cancellation until ${formatDate(refundableUntil)}` : "Refundable";
     }
 
     function stayRows(state) {
@@ -1160,6 +1199,7 @@
     function showLoggedOut() {
       sessionStorage.removeItem(USER_KEY);
       navCta.hidden = false;
+      marketingEl.hidden = false;
       navLinks.hidden = navUserName.hidden = signoutButton.hidden = true;
       searchEl.hidden = true;
       loginEl.hidden = false;
@@ -1172,6 +1212,7 @@
       greetingEl.textContent = `Welcome back, ${user.name}.`;
       navUserName.textContent = user.name;
       navCta.hidden = true;
+      marketingEl.hidden = true;
       navLinks.hidden = navUserName.hidden = signoutButton.hidden = false;
       loginEl.hidden = true;
       searchEl.hidden = false;
@@ -1194,17 +1235,30 @@
       return `${startText} – ${endText} · ${nights} night${nights === 1 ? "" : "s"}`;
     }
 
+    const pastBookingsEl = document.getElementById("past-bookings-list");
+    const bookingsRetry = document.getElementById("bookings-retry");
+    const tripsEmpty = document.getElementById("trips-empty");
+    const tripsUpcoming = document.getElementById("trips-upcoming");
+    const tripsPast = document.getElementById("trips-past");
+    const tripTitle = document.getElementById("trip-title");
+    const tripStatus = document.getElementById("trip-status");
+    const tripRetry = document.getElementById("trip-retry");
+    const tripDetails = document.getElementById("trip-details");
+
     function renderBooking(booking) {
-      const row = el("li", "booking-row");
+      const row = el("li");
+      const link = el("a", "booking-link");
+      link.href = `#/trips/${encodeURIComponent(booking.id)}`;
       const info = el("div");
       info.appendChild(el("div", "booking-name", booking.hotel || "Hotel booking"));
       info.appendChild(el("div", "booking-meta", formatStay(booking.arrival, booking.departure)));
       if (booking.confirmation_number) {
         info.appendChild(el("div", "booking-meta", `Confirmation ${booking.confirmation_number}`));
       }
-      row.appendChild(info);
+      link.appendChild(info);
       const status = booking.status || "Pending";
-      row.appendChild(el("span", `booking-status is-${status.toLowerCase()}`, status));
+      link.appendChild(el("span", `booking-status is-${status.toLowerCase()}`, status));
+      row.appendChild(link);
       return row;
     }
 
@@ -1212,19 +1266,103 @@
       const user = currentUser();
       if (!user) return;
       bookingsStatus.className = "status";
-      bookingsStatus.textContent = "Loading your bookings…";
+      bookingsStatus.textContent = "Loading your trips…";
+      bookingsRetry.hidden = tripsEmpty.hidden = tripsUpcoming.hidden = tripsPast.hidden = true;
+
       try {
         const { bookings } = await workerJson(`/users/${encodeURIComponent(user.id)}/bookings`);
-        bookingsListEl.innerHTML = "";
-        for (const booking of bookings) bookingsListEl.appendChild(renderBooking(booking));
-        bookingsStatus.textContent = bookings.length ? "" : "No bookings yet.";
+        const today = new Date().toISOString().slice(0, 10);
+        const upcoming = bookings.filter(booking => !booking.departure || booking.departure >= today);
+        const past = bookings.filter(booking => booking.departure && booking.departure < today);
+        upcoming.sort((a, b) => (a.arrival ?? "").localeCompare(b.arrival ?? ""));
+        past.sort((a, b) => b.departure.localeCompare(a.departure));
+
+        bookingsListEl.replaceChildren(...upcoming.map(renderBooking));
+        pastBookingsEl.replaceChildren(...past.map(renderBooking));
+        tripsUpcoming.hidden = !upcoming.length;
+        tripsPast.hidden = !past.length;
+        tripsEmpty.hidden = Boolean(bookings.length);
+        bookingsStatus.textContent = "";
       } catch (error) {
         bookingsStatus.className = "status error";
         bookingsStatus.textContent = error.message;
+        bookingsRetry.hidden = false;
       }
     }
 
+    function formatDate(isoDate) {
+      const date = new Date(`${String(isoDate).slice(0, 10)}T00:00:00`);
+      return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    }
+
+    function bookingCancellationText(cancellations) {
+      if (!cancellations?.length) return null;
+      const refundable = cancellations.find(cancellation => cancellation.refundable);
+      if (!refundable) return "Non-refundable";
+      return refundable.valid_until ? `Free cancellation until ${formatDate(refundable.valid_until)}` : "Refundable";
+    }
+
+    function tripRows(booking, summary) {
+      if (!booking) {
+        return [
+          ["Status", summary.status],
+          ["Dates", formatStay(summary.arrival, summary.departure)],
+          ["Confirmation", summary.confirmation_number],
+          ["Booking ref", summary.id]
+        ];
+      }
+      const adults = booking.number_of_adults;
+      const children = booking.children_ages ?? [];
+      const guests = [
+        adults ? `${adults} adult${adults === 1 ? "" : "s"}` : null,
+        children.length ? `${children.length} child${children.length === 1 ? "" : "ren"} (ages ${children.join(", ")})` : null
+      ].filter(Boolean).join(", ");
+      const paid = booking.price?.due_at_booking;
+      const due = booking.price?.due_at_property;
+      return [
+        ["Confirmation", booking.confirmation_number],
+        ["Status", booking.status],
+        ["Dates", formatStay(booking.arrival, booking.departure)],
+        ["Guests", guests],
+        ["Rooms", booking.rooms],
+        ["Program", booking.program?.name],
+        ["Paid at booking", paid ? formatMoney(paid.total, paid.currency) : null],
+        ["Due at the hotel", due ? formatMoney(due.total, due.currency) : null],
+        ["Cancellation", bookingCancellationText(booking.cancellations)],
+        ["Reference", booking.reference]
+      ];
+    }
+
+    async function loadTrip(tripId) {
+      const user = currentUser();
+      if (!user) return;
+      tripTitle.textContent = "Your trip";
+      tripStatus.className = "status";
+      tripStatus.textContent = "Loading your trip…";
+      tripRetry.hidden = true;
+      tripDetails.innerHTML = "";
+
+      try {
+        const { booking, summary } = await workerJson(
+          `/users/${encodeURIComponent(user.id)}/bookings/${encodeURIComponent(tripId)}`
+        );
+        tripTitle.textContent = booking?.supplier?.name || summary.hotel || "Your trip";
+        document.title = `${tripTitle.textContent} · Homebody Travels`;
+        tripStatus.textContent = booking ? "" : "Full details appear once the hotel confirms your stay.";
+        renderDetails(tripDetails, tripRows(booking, summary));
+      } catch (error) {
+        tripStatus.className = "status error";
+        tripStatus.textContent = error.message;
+        tripRetry.hidden = false;
+      }
+    }
+
+    bookingsRetry.addEventListener("click", loadBookings);
+    tripRetry.addEventListener("click", () => loadTrip(decodeURIComponent(location.hash.split("/")[2] ?? "")));
+
     const savedCardsEl = document.getElementById("saved-cards");
+    const cardsRetry = document.getElementById("cards-retry");
+    cardsRetry.addEventListener("click", () => loadSavedCards());
     const cardsStatus = document.getElementById("cards-status");
     const addCardButton = document.getElementById("add-card");
     const cardForm = document.getElementById("card-form");
@@ -1254,6 +1392,7 @@
       if (!user) return;
       cardsStatus.className = "status";
       cardsStatus.textContent = "Loading your cards…";
+      cardsRetry.hidden = true;
       try {
         const { cards } = await workerJson(`/users/${encodeURIComponent(user.id)}/cards`);
         savedCardsEl.innerHTML = "";
@@ -1261,6 +1400,7 @@
         cardsStatus.textContent = cards.length ? "" : "No saved cards yet.";
       } catch (error) {
         showCardsError(error);
+        cardsRetry.hidden = false;
       }
     }
 

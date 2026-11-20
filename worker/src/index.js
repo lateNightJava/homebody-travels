@@ -21,6 +21,7 @@ const CHECKOUT_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/checkout$`);
 const USER_CARDS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards$`);
 const USER_CARD_GRANTS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/card-grants$`);
 const USER_BOOKINGS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/bookings$`);
+const USER_BOOKING_PATH = new RegExp(`^/users/(${UUID_PATTERN})/bookings/(${UUID_PATTERN})$`);
 const USER_OPEN_CHECKOUT_PATH = new RegExp(`^/users/(${UUID_PATTERN})/open-checkout$`);
 const MAX_OPEN_CHECKOUT_LENGTH = 8192;
 const CHECKOUT_KEY_PREFIX = "checkout:";
@@ -546,6 +547,24 @@ export default {
       } catch (err) {
         console.error(err);
         return json({ error: "We couldn't check this booking right now." }, 502, env);
+      }
+    }
+
+    const userBookingMatch = pathname.match(USER_BOOKING_PATH);
+    if (request.method === "GET" && userBookingMatch) {
+      const user = await env.USERS.get(`${USER_KEY_PREFIX}${userBookingMatch[1]}`, "json");
+      if (!user) return json({ error: "Log in again to see this trip." }, 404, env);
+      const stored = (user.bookings ?? []).find(booking => booking.id === userBookingMatch[2]);
+      if (!stored) return json({ error: "We couldn't find this trip." }, 404, env);
+
+      try {
+        const details = await getForaJson(env, `/bookings/${stored.id}/`);
+        if (details.ok) return json({ booking: details.data, summary: stored }, 200, env);
+        const status = await fetchForaBookingStatus(env, stored.id);
+        return json({ booking: null, summary: { ...stored, ...status } }, 200, env);
+      } catch (err) {
+        console.error(err);
+        return json({ error: "We couldn't load this trip right now." }, 502, env);
       }
     }
 
