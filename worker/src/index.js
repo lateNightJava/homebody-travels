@@ -11,6 +11,7 @@ const TOKEN_KEY = "fora:app_token";
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 const KV_MIN_TTL_SECONDS = 60;
 const HOTEL_SEARCH_LIMIT = 24;
+const MAX_RATE_SUMMARY_HOTELS = 10;
 const MAX_SEARCH_LENGTH = 128;
 const UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const HOTEL_ROOMS_PATH = new RegExp(`^/hotels/(${UUID_PATTERN})/rooms$`);
@@ -390,6 +391,38 @@ export default {
 
     if (request.method === "GET" && pathname === "/users") {
       return json({ users: await listUsers(env) }, 200, env);
+    }
+
+    if (request.method === "POST" && pathname === "/hotels/rate-summaries") {
+      const body = await request.json().catch(() => null);
+      const supplierIds = Array.isArray(body?.supplier_ids) ? body.supplier_ids : [];
+      if (
+        !supplierIds.length ||
+        supplierIds.length > MAX_RATE_SUMMARY_HOTELS ||
+        !supplierIds.every(id => CARD_ID_PATTERN.test(String(id)))
+      ) {
+        return json({ error: `Send between 1 and ${MAX_RATE_SUMMARY_HOTELS} hotels.` }, 400, env);
+      }
+      const { stay, error } = parseStay(body);
+      if (error) return json({ error }, 400, env);
+
+      try {
+        const result = await postForaJson(env, "/suppliers/rate-summaries/", {
+          supplier_ids: supplierIds,
+          start_date: stay.start,
+          end_date: stay.end,
+          number_of_adults: stay.adults,
+          currency: ROOMS_CURRENCY
+        });
+        if (!result.ok) {
+          console.error(`Fora rate summaries failed (${result.status}): ${JSON.stringify(result.data)}`);
+          return json({ error: "Prices are unavailable right now." }, result.status >= 500 ? 502 : result.status, env);
+        }
+        return json({ summaries: result.data.summaries }, 200, env);
+      } catch (err) {
+        console.error(err);
+        return json({ error: "Prices are unavailable right now." }, 502, env);
+      }
     }
 
     if (request.method === "GET" && pathname === "/hotels") {

@@ -89,6 +89,9 @@
     .card-meta { color: var(--muted); font-size: 14px; }
     .card-rating { font-size: 14px; font-weight: 500; }
     .card-rating span { color: var(--muted); font-weight: 400; }
+    .card-price { margin-top: auto; padding-top: 8px; font-size: 15px; }
+    .card-price.is-loading, .card-price.is-muted { color: var(--muted); font-size: 14px; }
+    .card-price-total { color: var(--muted); font-size: 13px; }
     .card-programs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 10px; }
     .card-programs img { height: 22px; width: auto; object-fit: contain; }
     .card-book { margin-top: 12px; align-self: flex-start; text-decoration: none; background: var(--accent); color: var(--accent-ink); padding: 8px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; border: 0; cursor: pointer; font-family: inherit; }
@@ -505,6 +508,9 @@
       }
 
       if (supplier.id && supplier.is_bookable !== false) {
+        const price = el("div", "card-price is-loading", "Checking prices…");
+        priceEls.set(supplier.id, price);
+        body.appendChild(price);
         const rooms = el("button", "card-book", "See rooms");
         rooms.type = "button";
         rooms.addEventListener("click", () => loadRooms(supplier));
@@ -1623,7 +1629,48 @@
     });
 
     const loadMoreButton = document.getElementById("load-more");
+    const RATE_SUMMARY_BATCH = 10;
+    const priceEls = new Map();
     let hotelSearch = null;
+    let hotelSearchId = 0;
+
+    function showPrice(supplierId, summary, failed) {
+      const priceEl = priceEls.get(supplierId);
+      if (!priceEl) return;
+      priceEl.classList.remove("is-loading");
+      if (failed || !summary?.price) {
+        priceEl.classList.add("is-muted");
+        priceEl.textContent = failed ? "Prices unavailable right now" : "No rooms for these dates";
+        return;
+      }
+      const { nightly, total, currency } = summary.price;
+      priceEl.replaceChildren(el("strong", null, `From ${formatMoney(nightly, currency)}`), " / night");
+      if (total) priceEl.appendChild(el("span", "card-price-total", ` · ${formatMoney(total, currency)} total`));
+    }
+
+    async function loadPrices(supplierIds, stay, searchId) {
+      const batches = [];
+      for (let start = 0; start < supplierIds.length; start += RATE_SUMMARY_BATCH) {
+        batches.push(supplierIds.slice(start, start + RATE_SUMMARY_BATCH));
+      }
+      await Promise.all(
+        batches.map(async ids => {
+          let summaries = null;
+          try {
+            ({ summaries } = await workerJson("/hotels/rate-summaries", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ supplier_ids: ids, ...stay })
+            }));
+          } catch {
+            summaries = null;
+          }
+          if (searchId !== hotelSearchId) return;
+          const byHotel = new Map((summaries ?? []).map(summary => [summary.supplier_id, summary]));
+          for (const id of ids) showPrice(id, byHotel.get(id), summaries === null);
+        })
+      );
+    }
 
     async function loadHotels() {
       const { query, offset } = hotelSearch;
@@ -1636,11 +1683,14 @@
         const response = await fetch(`${WORKER_URL}/hotels?${new URLSearchParams({ search: query, offset: String(offset) })}`);
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || `Search failed (${response.status}).`);
-        for (const supplier of data.results ?? []) resultsEl.appendChild(renderSupplierCard(supplier));
+        const suppliers = data.results ?? [];
+        for (const supplier of suppliers) resultsEl.appendChild(renderSupplierCard(supplier));
+        const priced = suppliers.filter(supplier => supplier.id && supplier.is_bookable !== false).map(supplier => supplier.id);
+        if (priced.length) loadPrices(priced, hotelSearch.stay, hotelSearchId);
 
         const shown = resultsEl.children.length;
         statusEl.textContent = shown ? `Showing ${shown} of ${data.count} hotels` : "No hotels found. Try another destination.";
-        hotelSearch = { query, offset: data.next_offset };
+        hotelSearch = { ...hotelSearch, offset: data.next_offset };
         loadMoreButton.hidden = data.next_offset == null;
       } catch (error) {
         statusEl.className = "status error";
@@ -1653,7 +1703,13 @@
 
     document.getElementById("search-form").addEventListener("submit", event => {
       event.preventDefault();
-      hotelSearch = { query: document.getElementById("query").value.trim(), offset: 0 };
+      hotelSearchId += 1;
+      priceEls.clear();
+      hotelSearch = {
+        query: document.getElementById("query").value.trim(),
+        offset: 0,
+        stay: { start: checkInEl.value, end: checkOutEl.value, adults: Number(adultsEl.value) }
+      };
       resultsEl.innerHTML = "";
       loadMoreButton.hidden = true;
       roomsEl.hidden = true;
