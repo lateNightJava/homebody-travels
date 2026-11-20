@@ -26,6 +26,7 @@ const MAX_LISTED_BOOKINGS = 20;
 const FORA_API_VERSION = "1";
 const CARD_ID_PATTERN = new RegExp(`^${UUID_PATTERN}$`);
 const MAX_RATE_ID_LENGTH = 256;
+const MAX_LOYALTY_NUMBER_LENGTH = 50;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_ADULTS = 9;
 const ROOMS_CURRENCY = "USD";
@@ -164,6 +165,7 @@ async function fetchForaCart(env, cartId) {
         id: rate.id,
         program_id: program.id,
         program_name: program.name,
+        member_rate_required: program.member_rate_required,
         room_description: rate.room,
         is_refundable: rate.cancellations.some(cancellation => cancellation.refundable),
         price: { total: rate.price.total ?? rate.price.nightly, currency: rate.price.currency }
@@ -267,11 +269,12 @@ function foraResult(result, env, failure) {
   return json({ error: failure, fora: result.data }, result.status, env);
 }
 
-function saveForaCheckout(env, cartId, cardId, user) {
+function saveForaCheckout(env, cartId, { cardId, loyaltyNumber }, user) {
   return sendForaJson(env, "PATCH", `/carts/${cartId}/`, {
     contact_id: user.fora_client_id,
     card_id: cardId,
-    email: user.email
+    email: user.email,
+    ...(loyaltyNumber ? { loyalty_number: loyaltyNumber } : {})
   });
 }
 
@@ -489,14 +492,18 @@ export default {
       const body = await request.json().catch(() => null);
       const userId = typeof body?.user_id === "string" ? body.user_id : "";
       const cardId = typeof body?.card_id === "string" ? body.card_id : "";
+      const loyaltyNumber = typeof body?.loyalty_number === "string" ? body.loyalty_number.trim() : "";
       if (!userId) return json({ error: "Log in first." }, 400, env);
       if (!CARD_ID_PATTERN.test(cardId)) return json({ error: "Choose a card." }, 400, env);
+      if (loyaltyNumber.length > MAX_LOYALTY_NUMBER_LENGTH) {
+        return json({ error: "Loyalty number is too long." }, 400, env);
+      }
       const user = await env.USERS.get(`${USER_KEY_PREFIX}${userId}`, "json");
       if (!user?.fora_client_id) return json({ error: "Log in again to book." }, 400, env);
 
       try {
         return foraResult(
-          await saveForaCheckout(env, checkoutMatch[1], cardId, user),
+          await saveForaCheckout(env, checkoutMatch[1], { cardId, loyaltyNumber }, user),
           env,
           "We couldn't save your checkout details."
         );

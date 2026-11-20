@@ -265,6 +265,10 @@
               <label for="card-select">Pay with</label>
               <select id="card-select"></select>
             </div>
+            <div id="loyalty-picker" class="card-picker" hidden>
+              <label for="loyalty-number">Member number</label>
+              <input id="loyalty-number" placeholder="Hotel loyalty number" maxlength="50" autocomplete="off">
+            </div>
             <form id="checkout-card-form" class="card-form" hidden>
               <input name="holder_name" placeholder="Name on card" autocomplete="cc-name" required>
               <div id="tokenex-checkout-number" class="tokenex-field"></div>
@@ -405,6 +409,8 @@
     const bookNote = document.getElementById("book-note");
     const cardPicker = document.getElementById("card-picker");
     const cardSelect = document.getElementById("card-select");
+    const loyaltyPicker = document.getElementById("loyalty-picker");
+    const loyaltyInput = document.getElementById("loyalty-number");
     let selectedRoom = null;
     let roomsSearch = 0;
     let currentStay = null;
@@ -544,16 +550,17 @@
       side.appendChild(el("span", "room-price", formatMoney(rate.price.total, rate.price.currency)));
       const select = el("button", "card-book", "Select");
       select.type = "button";
-      select.addEventListener("click", () => checkRate(cartId, rate.id));
+      select.addEventListener("click", () => checkRate(cartId, rate));
       side.appendChild(select);
       row.appendChild(side);
       return row;
     }
 
-    async function checkRate(cartId, rateId) {
+    async function checkRate(cartId, { id: rateId, member_rate_required: memberRateRequired }) {
       selectedRoom = null;
       closeCheckoutCard();
-      bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
+      bookButton.hidden = bookNote.hidden = cardPicker.hidden = loyaltyPicker.hidden = true;
+      loyaltyInput.value = "";
       selectionStatus.className = "status";
       selectionStatus.textContent = "Confirming the price and terms…";
       selectionDetails.innerHTML = "";
@@ -569,7 +576,9 @@
         if (!response.ok) throw new Error(rate.error || `Couldn't confirm this room (${response.status}).`);
         selectionStatus.textContent = "Price and terms confirmed.";
         renderSelection(rate);
-        selectedRoom = { cartId, rateId, version: rate.cart_version };
+        selectedRoom = { cartId, rateId, version: rate.cart_version, memberRateRequired };
+        loyaltyPicker.hidden = !memberRateRequired;
+        loyaltyInput.required = memberRateRequired;
         loadCards();
       } catch (error) {
         selectionStatus.className = "status error";
@@ -638,7 +647,7 @@
           workerJson(`/carts/${encodeURIComponent(room.cartId)}/checkout`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ user_id: user.id, card_id: cardId })
+            body: JSON.stringify({ user_id: user.id, card_id: cardId, loyalty_number: loyaltyInput.value.trim() })
           })
         )
         .then(checkout => {
@@ -654,6 +663,7 @@
       if (!selectedRoom || !user) return;
       const usingNewCard = cardSelect.value === NEW_CARD;
       if (usingNewCard && (!checkoutCapture || !checkoutCardForm.reportValidity())) return;
+      if (selectedRoom.memberRateRequired && !loyaltyInput.reportValidity()) return;
       bookButton.disabled = true;
       selectionStatus.className = "status";
 
@@ -675,7 +685,7 @@
         if (!response.ok) throw new Error(booking.fora?.error?.message || booking.error || `Couldn't book this room (${response.status}).`);
         selectedRoom = null;
         closeCheckoutCard();
-        bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
+        bookButton.hidden = bookNote.hidden = cardPicker.hidden = loyaltyPicker.hidden = true;
         await followBooking(booking);
       } catch (error) {
         selectionStatus.className = "status error";
@@ -714,6 +724,10 @@
     }
 
     bookButton.addEventListener("click", bookRoom);
+    loyaltyInput.addEventListener("change", () => {
+      if (cardSelect.value !== NEW_CARD) saveCheckout(cardSelect.value);
+    });
+
     cardSelect.addEventListener("change", () => {
       if (cardSelect.value === NEW_CARD) return openCheckoutCard();
       closeCheckoutCard();
