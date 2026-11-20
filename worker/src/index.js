@@ -14,11 +14,13 @@ const HOTEL_SEARCH_LIMIT = 24;
 const MAX_SEARCH_LENGTH = 128;
 const UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const HOTEL_ROOMS_PATH = new RegExp(`^/hotels/(${UUID_PATTERN})/rooms$`);
+const CART_PATH = new RegExp(`^/carts/(${UUID_PATTERN})$`);
 const RATE_CHECK_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/rate-checks$`);
 const BOOKING_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/bookings$`);
 const USER_CARDS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards$`);
 const USER_CARD_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards/(${UUID_PATTERN})$`);
 const USER_BOOKINGS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/bookings$`);
+const BOOKING_STATUS_PATH = new RegExp(`^/bookings/(${UUID_PATTERN})/status$`);
 const MAX_LISTED_BOOKINGS = 20;
 const FORA_API_VERSION = "1";
 const CARD_ID_PATTERN = new RegExp(`^${UUID_PATTERN}$`);
@@ -130,28 +132,30 @@ async function searchForaHotels(env, query, offset) {
   return { count, results, next_offset: seen < count ? seen : null };
 }
 
-async function fetchForaRooms(env, supplierId, { start, end, adults }) {
-  const { access_token } = await getForaToken(env);
-  const response = await fetch(`${env.FORA_API_BASE}/suppliers/${supplierId}/rates/`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${access_token}`,
-      "Content-Type": "application/json",
-      "Fora-Api-Version": FORA_API_VERSION
-    },
-    body: JSON.stringify({
-      start_date: start,
-      end_date: end,
-      number_of_adults: adults,
-      currency: ROOMS_CURRENCY
-    })
+async function startForaCart(env, supplierId, { start, end, adults }) {
+  const result = await sendForaJson(env, "POST", "/carts/", {
+    supplier_id: supplierId,
+    start_date: start,
+    end_date: end,
+    number_of_adults: adults,
+    currency: ROOMS_CURRENCY
   });
-  if (response.status === 403 || response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`Fora rooms request failed (${response.status}): ${await response.text()}`);
+  if (result.status === 403 || result.status === 404) return null;
+  if (!result.ok) {
+    throw new Error(`Fora cart start failed (${result.status}): ${JSON.stringify(result.data)}`);
   }
 
-  const { cart_id, programs } = await response.json();
+  return { cart_id: result.data.id, status: result.data.status, version: result.data.version };
+}
+
+async function fetchForaCart(env, cartId) {
+  const result = await getForaJson(env, `/carts/${cartId}/`);
+  if (result.status === 404) return null;
+  if (!result.ok) {
+    throw new Error(`Fora cart request failed (${result.status}): ${JSON.stringify(result.data)}`);
+  }
+
+  const { status, version, providers, programs } = result.data;
   const rates = programs.flatMap(program =>
     program.rates
       .filter(rate => rate.price)
@@ -164,15 +168,12 @@ async function fetchForaRooms(env, supplierId, { start, end, adults }) {
         price: { total: rate.price.total ?? rate.price.nightly, currency: rate.price.currency }
       }))
   );
-  return { cart_id, rates };
+  return { status, version, providers, rates };
 }
 
-async function checkForaRate(env, cartId, rateId, programId) {
-  const result = await postForaJson(env, `/carts/${cartId}/rate-checks/`, {
-    rate_id: rateId,
-    program_id: programId
-  });
-  if ([400, 403, 404].includes(result.status)) return null;
+async function checkForaRate(env, cartId, rateId) {
+  const result = await sendForaJson(env, "POST", `/carts/${cartId}/rate-checks/`, { rate_id: rateId });
+  if ([400, 403, 404, 409].includes(result.status)) return null;
   if (!result.ok) {
     throw new Error(`Fora rate check failed (${result.status}): ${JSON.stringify(result.data)}`);
   }
@@ -184,7 +185,8 @@ async function checkForaRate(env, cartId, rateId, programId) {
     price: rate.price ? { total: rate.price.total ?? rate.price.nightly, currency: rate.price.currency } : null,
     is_refundable: rate.cancellations.some(cancellation => cancellation.refundable),
     cancellations: rate.cancellations,
-    deposits: []
+    deposits: [],
+    cart_version: rate.cart_version
   };
 }
 
@@ -201,10 +203,23 @@ async function fetchForaCards(env, clientId) {
   return cards;
 }
 
-async function postForaJson(env, path, body) {
+async function getForaJson(env, path) {
   const { access_token } = await getForaToken(env);
   const response = await fetch(`${env.FORA_API_BASE}${path}`, {
-    method: "POST",
+    headers: { Authorization: `Bearer ${access_token}`, "Fora-Api-Version": FORA_API_VERSION }
+  });
+  const data = await response.json().catch(() => ({}));
+  return { status: response.status, ok: response.ok, data };
+}
+
+function postForaJson(env, path, body) {
+  return sendForaJson(env, "POST", path, body);
+}
+
+async function sendForaJson(env, method, path, body) {
+  const { access_token } = await getForaToken(env);
+  const response = await fetch(`${env.FORA_API_BASE}${path}`, {
+    method,
     headers: {
       Authorization: `Bearer ${access_token}`,
       "Content-Type": "application/json",
@@ -251,16 +266,31 @@ function foraResult(result, env, failure) {
   return json({ error: failure, fora: result.data }, result.status, env);
 }
 
-async function bookForaRoom(env, cartId, { rateId, programId, cardId }, user) {
-  const result = await postForaJson(env, `/carts/${cartId}/bookings/`, {
-    rate_id: rateId,
-    program_id: programId,
+async function bookForaRoom(env, cartId, { cardId, version }, user) {
+  const checkout = await sendForaJson(env, "PATCH", `/carts/${cartId}/`, {
     contact_id: user.fora_client_id,
     card_id: cardId,
     email: user.email
   });
-  if (result.ok) result.data.status = result.data.status ?? "Pending";
-  return result;
+  if (!checkout.ok) return checkout;
+  if (checkout.data.version !== version + 1) {
+    return {
+      status: 409,
+      ok: false,
+      data: { error: { message: "This room changed since you checked it. Select it again to see the latest price." } }
+    };
+  }
+
+  return postForaJson(env, `/carts/${cartId}/bookings/`, { version: checkout.data.version });
+}
+
+async function fetchForaBookingStatus(env, bookingId) {
+  const result = await getForaJson(env, `/bookings/${bookingId}/status/`);
+  if (!result.ok) {
+    throw new Error(`Fora booking status failed (${result.status}): ${JSON.stringify(result.data)}`);
+  }
+
+  return result.data;
 }
 
 function bookingSummary(booking) {
@@ -282,12 +312,11 @@ async function rememberBooking(env, user, booking) {
 }
 
 async function refreshBooking(env, stored) {
-  const { access_token } = await getForaToken(env);
-  const response = await fetch(`${env.FORA_API_BASE}/bookings/${stored.id}/`, {
-    headers: { Authorization: `Bearer ${access_token}`, "Fora-Api-Version": FORA_API_VERSION }
-  });
-  if (!response.ok) return stored;
-  return bookingSummary(await response.json());
+  const { status, confirmation_number } = await fetchForaBookingStatus(env, stored.id);
+  if (status === "Pending" || status === "Failed") return { ...stored, status, confirmation_number };
+
+  const details = await getForaJson(env, `/bookings/${stored.id}/`);
+  return details.ok ? bookingSummary(details.data) : { ...stored, status, confirmation_number };
 }
 
 function parseStay(body) {
@@ -384,9 +413,21 @@ export default {
       if (error) return json({ error }, 400, env);
 
       try {
-        const rooms = await fetchForaRooms(env, roomsMatch[1], stay);
-        if (!rooms) return json({ error: "This hotel can't be booked online." }, 404, env);
-        return json(rooms, 200, env);
+        const cart = await startForaCart(env, roomsMatch[1], stay);
+        if (!cart) return json({ error: "This hotel can't be booked online." }, 404, env);
+        return json(cart, 202, env);
+      } catch (err) {
+        console.error(err);
+        return json({ error: "Rooms are unavailable right now." }, 502, env);
+      }
+    }
+
+    const cartMatch = pathname.match(CART_PATH);
+    if (request.method === "GET" && cartMatch) {
+      try {
+        const cart = await fetchForaCart(env, cartMatch[1]);
+        if (!cart) return json({ error: "This search has expired. Search again." }, 404, env);
+        return json(cart, 200, env);
       } catch (err) {
         console.error(err);
         return json({ error: "Rooms are unavailable right now." }, 502, env);
@@ -397,13 +438,10 @@ export default {
     if (request.method === "POST" && rateCheckMatch) {
       const body = await request.json().catch(() => null);
       const rateId = typeof body?.rate_id === "string" ? body.rate_id : "";
-      const programId = typeof body?.program_id === "string" ? body.program_id : "";
-      if (!rateId || rateId.length > MAX_RATE_ID_LENGTH || !CARD_ID_PATTERN.test(programId)) {
-        return json({ error: "Choose a room." }, 400, env);
-      }
+      if (!rateId || rateId.length > MAX_RATE_ID_LENGTH) return json({ error: "Choose a room." }, 400, env);
 
       try {
-        const rate = await checkForaRate(env, rateCheckMatch[1], rateId, programId);
+        const rate = await checkForaRate(env, rateCheckMatch[1], rateId);
         if (!rate) return json({ error: "This room is no longer available." }, 404, env);
         return json(rate, 200, env);
       } catch (err) {
@@ -458,11 +496,10 @@ export default {
     const bookingMatch = pathname.match(BOOKING_PATH);
     if (request.method === "POST" && bookingMatch) {
       const body = await request.json().catch(() => null);
-      const rateId = typeof body?.rate_id === "string" ? body.rate_id : "";
       const userId = typeof body?.user_id === "string" ? body.user_id : "";
       const cardId = typeof body?.card_id === "string" ? body.card_id : "";
-      const programId = typeof body?.program_id === "string" ? body.program_id : "";
-      if (!rateId || rateId.length > MAX_RATE_ID_LENGTH || !userId || !CARD_ID_PATTERN.test(programId)) {
+      const version = Number(body?.version);
+      if (!userId || !Number.isInteger(version) || version < 1) {
         return json({ error: "Choose a room and log in first." }, 400, env);
       }
       if (!CARD_ID_PATTERN.test(cardId)) return json({ error: "Choose a card." }, 400, env);
@@ -470,12 +507,22 @@ export default {
       if (!user?.fora_client_id) return json({ error: "Log in again to book." }, 400, env);
 
       try {
-        const result = await bookForaRoom(env, bookingMatch[1], { rateId, programId, cardId }, user);
+        const result = await bookForaRoom(env, bookingMatch[1], { cardId, version }, user);
         if (result.ok) await rememberBooking(env, user, result.data);
         return foraResult(result, env, "We couldn't book this room.");
       } catch (err) {
         console.error(err);
         return json({ error: "We couldn't book this room. Please try again." }, 502, env);
+      }
+    }
+
+    const bookingStatusMatch = pathname.match(BOOKING_STATUS_PATH);
+    if (request.method === "GET" && bookingStatusMatch) {
+      try {
+        return json(await fetchForaBookingStatus(env, bookingStatusMatch[1]), 200, env);
+      } catch (err) {
+        console.error(err);
+        return json({ error: "We couldn't check this booking right now." }, 502, env);
       }
     }
 

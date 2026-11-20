@@ -406,6 +406,12 @@
     const cardPicker = document.getElementById("card-picker");
     const cardSelect = document.getElementById("card-select");
     let selectedRoom = null;
+    let roomsSearch = 0;
+    let currentStay = null;
+    const POLL_MS = 1500;
+    const CART_POLL_LIMIT = 40;
+    const BOOKING_POLL_LIMIT = 120;
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const checkoutHeading = document.getElementById("checkout-heading");
     const bookedEl = document.getElementById("booked");
     const bookedTitle = document.getElementById("booked-title");
@@ -434,6 +440,7 @@
     }
 
     function showHotelsView() {
+      roomsSearch += 1;
       roomsEl.hidden = true;
       statusEl.hidden = false;
       resultsEl.hidden = false;
@@ -467,8 +474,21 @@
       return groups;
     }
 
+    function providerProgress(providers) {
+      const finished = providers.filter(provider => provider.status !== "pending").length;
+      return `${finished} of ${providers.length} suppliers answered`;
+    }
+
+    function renderRooms(rates, cartId) {
+      const rooms = groupRatesByRoom(rates);
+      roomsList.innerHTML = "";
+      for (const [room, roomRates] of rooms) roomsList.appendChild(renderRoomGroup(room, roomRates, cartId));
+      return rooms;
+    }
+
     async function loadRooms(supplier) {
       const stay = { start: checkInEl.value, end: checkOutEl.value, adults: Number(adultsEl.value) };
+      const search = ++roomsSearch;
       hotelsScrollY = window.scrollY;
       statusEl.hidden = true;
       resultsEl.hidden = true;
@@ -480,17 +500,27 @@
       showRoomsView();
 
       try {
-        const response = await fetch(`${WORKER_URL}/hotels/${encodeURIComponent(supplier.id)}/rooms`, {
+        const started = await workerJson(`/hotels/${encodeURIComponent(supplier.id)}/rooms`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(stay)
         });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || `Couldn't load rooms (${response.status}).`);
-        const rooms = groupRatesByRoom(data.rates ?? []);
-        roomsStatus.textContent = rooms.size ? `${rooms.size} rooms · ${stay.start} → ${stay.end}` : "No bookable rooms for these dates.";
-        for (const [room, rates] of rooms) roomsList.appendChild(renderRoomGroup(room, rates, data.cart_id));
+        currentStay = stay;
+
+        for (let poll = 0; poll < CART_POLL_LIMIT; poll += 1) {
+          const cart = await workerJson(`/carts/${encodeURIComponent(started.cart_id)}`);
+          if (search !== roomsSearch) return;
+          const rooms = renderRooms(cart.rates, started.cart_id);
+          if (cart.status !== "searching") {
+            roomsStatus.textContent = rooms.size ? `${rooms.size} rooms · ${stay.start} → ${stay.end}` : "No bookable rooms for these dates.";
+            return;
+          }
+          roomsStatus.textContent = `Checking live rates… ${providerProgress(cart.providers)}`;
+          await sleep(POLL_MS);
+        }
+        roomsStatus.textContent = "Some suppliers are still answering. Showing the rooms found so far.";
       } catch (error) {
+        if (search !== roomsSearch) return;
         roomsStatus.className = "status error";
         roomsStatus.textContent = error.message;
       }
@@ -513,13 +543,13 @@
       side.appendChild(el("span", "room-price", formatMoney(rate.price.total, rate.price.currency)));
       const select = el("button", "card-book", "Select");
       select.type = "button";
-      select.addEventListener("click", () => checkRate(cartId, rate.id, rate.program_id));
+      select.addEventListener("click", () => checkRate(cartId, rate.id));
       side.appendChild(select);
       row.appendChild(side);
       return row;
     }
 
-    async function checkRate(cartId, rateId, programId) {
+    async function checkRate(cartId, rateId) {
       selectedRoom = null;
       closeCheckoutCard();
       bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
@@ -532,13 +562,13 @@
         const response = await fetch(`${WORKER_URL}/carts/${encodeURIComponent(cartId)}/rate-checks`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rate_id: rateId, program_id: programId })
+          body: JSON.stringify({ rate_id: rateId })
         });
         const rate = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(rate.error || `Couldn't confirm this room (${response.status}).`);
         selectionStatus.textContent = "Price and terms confirmed.";
         renderSelection(rate);
-        selectedRoom = { cartId, rateId, programId };
+        selectedRoom = { cartId, rateId, version: rate.cart_version };
         loadCards();
       } catch (error) {
         selectionStatus.className = "status error";
@@ -619,33 +649,51 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            rate_id: selectedRoom.rateId,
-            program_id: selectedRoom.programId,
             user_id: user.id,
-            card_id: cardId
+            card_id: cardId,
+            version: selectedRoom.version
           })
         });
         const booking = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(booking.fora?.error?.message || booking.error || `Couldn't book this room (${response.status}).`);
         selectedRoom = null;
         closeCheckoutCard();
-        loadBookings();
         bookButton.hidden = bookNote.hidden = cardPicker.hidden = true;
-        selectionStatus.textContent = booking.status === "Pending" ? "Booking submitted. The hotel is confirming your stay." : "You're booked!";
-        renderDetails([
-          ["Confirmation", booking.confirmation_number],
-          ["Status", booking.status],
-          ["Check-in", booking.arrival],
-          ["Check-out", booking.departure],
-          ["Guests", booking.number_of_adults],
-          ["Booking ref", booking.id]
-        ]);
+        await followBooking(booking);
       } catch (error) {
         selectionStatus.className = "status error";
         selectionStatus.textContent = error instanceof Error ? error.message : JSON.stringify(error);
       } finally {
         bookButton.disabled = false;
       }
+    }
+
+    function showBookingResult(booking) {
+      const messages = {
+        Pending: "Booking submitted. The hotel is confirming your stay…",
+        Failed: "This booking didn't go through. Select the room again to retry."
+      };
+      selectionStatus.className = booking.status === "Failed" ? "status error" : "status";
+      selectionStatus.textContent = messages[booking.status] ?? "You're booked!";
+      renderDetails([
+        ["Confirmation", booking.confirmation_number],
+        ["Status", booking.status],
+        ["Check-in", currentStay?.start],
+        ["Check-out", currentStay?.end],
+        ["Guests", currentStay?.adults],
+        ["Booking ref", booking.id]
+      ]);
+    }
+
+    async function followBooking(booking) {
+      let current = booking;
+      showBookingResult(current);
+      for (let poll = 0; current.status === "Pending" && poll < BOOKING_POLL_LIMIT; poll += 1) {
+        await sleep(POLL_MS);
+        current = { ...current, ...(await workerJson(`/bookings/${encodeURIComponent(booking.id)}/status`)) };
+        showBookingResult(current);
+      }
+      loadBookings();
     }
 
     bookButton.addEventListener("click", bookRoom);
