@@ -21,6 +21,9 @@ const CHECKOUT_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/checkout$`);
 const USER_CARDS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards$`);
 const USER_CARD_GRANTS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/card-grants$`);
 const USER_BOOKINGS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/bookings$`);
+const USER_OPEN_CHECKOUT_PATH = new RegExp(`^/users/(${UUID_PATTERN})/open-checkout$`);
+const MAX_OPEN_CHECKOUT_LENGTH = 8192;
+const CHECKOUT_KEY_PREFIX = "checkout:";
 const BOOKING_STATUS_PATH = new RegExp(`^/bookings/(${UUID_PATTERN})/status$`);
 const MAX_LISTED_BOOKINGS = 20;
 const FORA_API_VERSION = "1";
@@ -304,6 +307,7 @@ async function rememberBooking(env, user, booking) {
   await env.USERS.put(`${USER_KEY_PREFIX}${user.id}`, JSON.stringify({ ...user, bookings }), {
     metadata: { first_name: user.first_name, last_name: user.last_name }
   });
+  await env.USERS.delete(`${CHECKOUT_KEY_PREFIX}${user.id}`);
 }
 
 async function refreshBooking(env, stored) {
@@ -543,6 +547,26 @@ export default {
         console.error(err);
         return json({ error: "We couldn't check this booking right now." }, 502, env);
       }
+    }
+
+    const openCheckoutMatch = pathname.match(USER_OPEN_CHECKOUT_PATH);
+    if (openCheckoutMatch && (request.method === "GET" || request.method === "POST")) {
+      const user = await env.USERS.get(`${USER_KEY_PREFIX}${openCheckoutMatch[1]}`, "json");
+      if (!user) return json({ error: "Log in again to continue your checkout." }, 404, env);
+      const checkoutKey = `${CHECKOUT_KEY_PREFIX}${user.id}`;
+      if (request.method === "GET") return json({ checkout: await env.USERS.get(checkoutKey, "json") }, 200, env);
+
+      const body = await request.json().catch(() => null);
+      const checkout = body?.checkout ?? null;
+      const valid =
+        checkout === null ||
+        (typeof checkout === "object" &&
+          CARD_ID_PATTERN.test(String(checkout.cartId ?? "")) &&
+          JSON.stringify(checkout).length <= MAX_OPEN_CHECKOUT_LENGTH);
+      if (!valid) return json({ error: "Invalid checkout." }, 400, env);
+      if (checkout === null) await env.USERS.delete(checkoutKey);
+      else await env.USERS.put(checkoutKey, JSON.stringify(checkout));
+      return json({ checkout }, 200, env);
     }
 
     const userBookingsMatch = pathname.match(USER_BOOKINGS_PATH);

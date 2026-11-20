@@ -50,6 +50,10 @@
     .checkout-summary h3 { font-family: Fraunces, Georgia, serif; font-size: 20px; margin: 0 0 8px; }
     .checkout-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; }
     .checkout-actions .card-book { margin: 0; }
+    .resume { display: flex; justify-content: space-between; align-items: center; gap: 16px; max-width: 640px; padding: 16px 20px; margin: 0 0 24px; border: 1px solid var(--accent); border-radius: 16px; background: var(--bg); }
+    .resume-meta { color: var(--muted); font-size: 14px; }
+    .resume-actions { display: flex; align-items: center; gap: 14px; flex: none; }
+    .resume-actions .card-book { margin: 0; }
 
     .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: center; padding: 48px 0 72px; }
     .hero h1 { font-size: clamp(36px, 5vw, 56px); }
@@ -239,6 +243,17 @@
       <div id="search" hidden>
         <h2>Find your next stay</h2>
         <p class="lede"><span id="greeting">You're signed in.</span></p>
+        <div id="resume-checkout" class="resume" hidden>
+          <div>
+            <strong>Continue your checkout</strong>
+            <div id="resume-text" class="resume-meta"></div>
+          </div>
+          <div class="resume-actions">
+            <button id="resume-dismiss" class="signout" type="button">Dismiss</button>
+            <button id="resume-continue" class="card-book" type="button">Continue</button>
+          </div>
+        </div>
+        <p id="resume-status" class="status" hidden></p>
         <form id="search-form" class="search-bar">
           <input id="query" placeholder="Where to? e.g. Lisbon" required>
           <input id="check-in" type="date" aria-label="Check-in" required>
@@ -496,6 +511,7 @@
       if (page !== "home") roomsSearch += 1;
       for (const main of document.querySelectorAll("[data-page]")) main.hidden = main.dataset.page !== page;
       for (const link of navLinks.querySelectorAll("[data-nav]")) link.classList.toggle("active", link.dataset.nav === page);
+      if (page === "home") loadOpenCheckout();
       if (page === "trips") loadBookings();
       if (page === "wallet") loadSavedCards();
       if (page === "checkout") showCheckout(location.hash.split("/").slice(2).map(decodeURIComponent));
@@ -712,12 +728,88 @@
         });
         const state = { cartId, rateId, version: rate.cart_version, memberRateRequired, hotel: currentHotel, stay: currentStay, rate };
         saveCheckoutState(state);
+        rememberCheckout(state);
         location.hash = checkoutPath(state, "details");
       } catch (error) {
         roomsStatus.className = "status error";
         roomsStatus.textContent = error.message;
       }
     }
+
+    const resumeEl = document.getElementById("resume-checkout");
+    const resumeText = document.getElementById("resume-text");
+    const resumeStatus = document.getElementById("resume-status");
+    const resumeContinue = document.getElementById("resume-continue");
+    let savedCheckout = null;
+
+    function openCheckoutPath() {
+      return `/users/${encodeURIComponent(currentUser().id)}/open-checkout`;
+    }
+
+    function rememberCheckout(state) {
+      const { booking, ...checkout } = state;
+      workerJson(openCheckoutPath(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ checkout })
+      }).catch(() => {});
+    }
+
+    function forgetCheckout() {
+      savedCheckout = null;
+      resumeEl.hidden = resumeStatus.hidden = true;
+      workerJson(openCheckoutPath(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ checkout: null })
+      }).catch(() => {});
+    }
+
+    async function loadOpenCheckout() {
+      resumeEl.hidden = resumeStatus.hidden = true;
+      if (!currentUser()) return;
+      try {
+        ({ checkout: savedCheckout } = await workerJson(openCheckoutPath()));
+      } catch {
+        savedCheckout = null;
+      }
+      if (!savedCheckout) return;
+
+      const { hotel, stay, rate } = savedCheckout;
+      resumeText.textContent = [hotel, stay ? formatStay(stay.start, stay.end) : null, rate?.room_description]
+        .filter(Boolean)
+        .join(" · ");
+      resumeEl.hidden = false;
+    }
+
+    async function resumeCheckout() {
+      const checkout = savedCheckout;
+      if (!checkout) return;
+      resumeContinue.disabled = true;
+      resumeStatus.hidden = false;
+      resumeStatus.className = "status";
+      resumeStatus.textContent = "Checking the latest price…";
+
+      try {
+        const rate = await workerJson(`/carts/${encodeURIComponent(checkout.cartId)}/rate-checks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rate_id: checkout.rateId })
+        });
+        const state = { ...checkout, rate, version: rate.cart_version };
+        saveCheckoutState(state);
+        rememberCheckout(state);
+        location.hash = checkoutPath(state, "details");
+      } catch (error) {
+        resumeStatus.className = "status error";
+        resumeStatus.textContent = `${error.message} Dismiss it and search again to find another room.`;
+      } finally {
+        resumeContinue.disabled = false;
+      }
+    }
+
+    resumeContinue.addEventListener("click", resumeCheckout);
+    document.getElementById("resume-dismiss").addEventListener("click", forgetCheckout);
 
     function renderDetails(container, rows) {
       container.innerHTML = "";
@@ -883,6 +975,7 @@
         await checkoutSave;
         state.cardLabel = cardSelect.selectedOptions[0]?.textContent ?? "";
         saveCheckoutState(state);
+        rememberCheckout(state);
         location.hash = checkoutPath(state, "review");
       } catch (error) {
         selectionStatus.className = "status error";
