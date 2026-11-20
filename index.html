@@ -29,6 +29,16 @@
     .logo { font-family: Fraunces, Georgia, serif; font-size: 22px; font-weight: 600; }
     .logo span { color: var(--accent); }
     nav a.cta { text-decoration: none; background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 999px; font-size: 14px; font-weight: 500; }
+    .logo { text-decoration: none; }
+    .nav-links { display: flex; gap: 24px; }
+    .nav-links a { text-decoration: none; color: var(--muted); font-weight: 500; font-size: 15px; padding: 4px 0; border-bottom: 2px solid transparent; }
+    .nav-links a.active { color: var(--ink); border-bottom-color: var(--accent); }
+    .nav-user { display: flex; align-items: center; gap: 14px; font-size: 14px; }
+    .nav-user-name { font-weight: 500; }
+    .page { padding: 48px 0 72px; min-height: 60vh; }
+    .page h2 { font-size: 34px; }
+    .page .lede { color: var(--muted); margin: 0 0 24px; }
+    .page .cards-panel { max-width: 640px; }
 
     .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: center; padding: 48px 0 72px; }
     .hero h1 { font-size: clamp(36px, 5vw, 56px); }
@@ -136,6 +146,8 @@
     [hidden] { display: none !important; }
 
     @media (max-width: 760px) {
+      nav { flex-wrap: wrap; row-gap: 8px; }
+      .nav-links { order: 3; width: 100%; gap: 20px; }
       .hero { grid-template-columns: 1fr; padding: 24px 0 48px; }
       .hero img { aspect-ratio: 16 / 10; }
       .pillars { grid-template-columns: 1fr; }
@@ -149,19 +161,29 @@
   <header class="site-header">
     <div class="wrap">
       <nav>
-        <div class="logo">Homebody <span>Travels</span></div>
-        <a class="cta" id="nav-cta" href="#book">Client sign in</a>
+        <a class="logo" href="#/">Homebody <span>Travels</span></a>
+        <div id="nav-links" class="nav-links" hidden>
+          <a href="#/" data-nav="home">Hotels</a>
+          <a href="#/trips" data-nav="trips">Trips</a>
+          <a href="#/wallet" data-nav="wallet">Wallet</a>
+        </div>
+        <div class="nav-user">
+          <span id="nav-user-name" class="nav-user-name" hidden></span>
+          <button id="signout" class="signout" type="button" hidden>Sign out</button>
+          <a class="cta" id="nav-cta" href="#/" data-to-booking>Client sign in</a>
+        </div>
       </nav>
     </div>
   </header>
 
+  <main data-page="home">
   <div class="wrap">
 
     <section class="hero">
       <div>
         <h1>Trips planned by someone who loves coming home.</h1>
         <p>Cozy boutique hotels, unhurried itineraries, and a real person who answers your texts. We plan the trip so you can actually enjoy it.</p>
-        <a class="button" href="#book">Browse hotels</a>
+        <a class="button" href="#/" data-to-booking>Browse hotels</a>
       </div>
       <img src="https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=900&q=70" alt="Hotel pool at golden hour">
     </section>
@@ -203,36 +225,7 @@
 
       <div id="search" hidden>
         <h2>Find your next stay</h2>
-        <p class="lede"><span id="greeting">You're signed in.</span> <button id="signout" class="signout" type="button">Sign out</button></p>
-        <section class="cards-panel">
-          <h3>Your cards</h3>
-          <ul id="saved-cards" class="saved-cards"></ul>
-          <p id="cards-status" class="status"></p>
-          <button id="add-card" class="card-book" type="button">Add a card</button>
-          <form id="card-form" class="card-form" hidden>
-            <input name="holder_name" placeholder="Name on card" autocomplete="cc-name" required>
-            <div id="tokenex-number" class="tokenex-field"></div>
-            <div class="card-form-row">
-              <div id="tokenex-cvv" class="tokenex-field"></div>
-              <input name="expiry" placeholder="MM/YYYY" autocomplete="cc-exp" pattern="(0[1-9]|1[0-2])/20[0-9]{2}" required>
-            </div>
-            <input name="line_1" placeholder="Billing address" autocomplete="address-line1" required>
-            <div class="card-form-row">
-              <input name="city" placeholder="City" autocomplete="address-level2" required>
-              <input name="state" placeholder="State" autocomplete="address-level1">
-            </div>
-            <div class="card-form-row">
-              <input name="postal_code" placeholder="Postal code" autocomplete="postal-code" required>
-              <input name="country" placeholder="Country code, e.g. US" value="US" maxlength="2" required>
-            </div>
-            <button id="save-card" type="submit">Save card</button>
-          </form>
-        </section>
-        <section class="cards-panel">
-          <h3>Your bookings</h3>
-          <ul id="bookings-list" class="bookings"></ul>
-          <p id="bookings-status" class="status"></p>
-        </section>
+        <p class="lede"><span id="greeting">You're signed in.</span></p>
         <form id="search-form" class="search-bar">
           <input id="query" placeholder="Where to? e.g. Lisbon" required>
           <input id="check-in" type="date" aria-label="Check-in" required>
@@ -293,6 +286,49 @@
       </div>
     </div>
   </section>
+
+  </main>
+
+  <main class="page" data-page="trips" hidden>
+    <div class="wrap">
+      <h2>Your trips</h2>
+      <p class="lede">Every stay you've booked with us, newest first.</p>
+        <section class="cards-panel">
+          <ul id="bookings-list" class="bookings"></ul>
+          <p id="bookings-status" class="status"></p>
+        </section>
+    </div>
+  </main>
+
+  <main class="page" data-page="wallet" hidden>
+    <div class="wrap">
+      <h2>Your wallet</h2>
+      <p class="lede">Cards saved securely to your travel profile.</p>
+        <section class="cards-panel">
+          <ul id="saved-cards" class="saved-cards"></ul>
+          <p id="cards-status" class="status"></p>
+          <button id="add-card" class="card-book" type="button">Add a card</button>
+          <form id="card-form" class="card-form" hidden>
+            <input name="holder_name" placeholder="Name on card" autocomplete="cc-name" required>
+            <div id="tokenex-number" class="tokenex-field"></div>
+            <div class="card-form-row">
+              <div id="tokenex-cvv" class="tokenex-field"></div>
+              <input name="expiry" placeholder="MM/YYYY" autocomplete="cc-exp" pattern="(0[1-9]|1[0-2])/20[0-9]{2}" required>
+            </div>
+            <input name="line_1" placeholder="Billing address" autocomplete="address-line1" required>
+            <div class="card-form-row">
+              <input name="city" placeholder="City" autocomplete="address-level2" required>
+              <input name="state" placeholder="State" autocomplete="address-level1">
+            </div>
+            <div class="card-form-row">
+              <input name="postal_code" placeholder="Postal code" autocomplete="postal-code" required>
+              <input name="country" placeholder="Country code, e.g. US" value="US" maxlength="2" required>
+            </div>
+            <button id="save-card" type="submit">Save card</button>
+          </form>
+        </section>
+    </div>
+  </main>
 
   <div id="checkout-overlay" class="checkout-overlay" hidden>
     <div class="checkout-modal" role="dialog" aria-modal="true" aria-label="Checkout">
@@ -393,6 +429,36 @@
 
     const greetingEl = document.getElementById("greeting");
     const navCta = document.getElementById("nav-cta");
+    const navLinks = document.getElementById("nav-links");
+    const navUserName = document.getElementById("nav-user-name");
+    const signoutButton = document.getElementById("signout");
+    const bookSection = document.getElementById("book");
+    const PAGES = ["home", "trips", "wallet"];
+
+    function currentPage() {
+      const page = location.hash.replace(/^#\/?/, "").split("/")[0];
+      return PAGES.includes(page) ? page : "home";
+    }
+
+    function showRoute() {
+      const page = currentUser() ? currentPage() : "home";
+      for (const main of document.querySelectorAll("[data-page]")) main.hidden = main.dataset.page !== page;
+      for (const link of navLinks.querySelectorAll("[data-nav]")) link.classList.toggle("active", link.dataset.nav === page);
+      if (page === "trips") loadBookings();
+      if (page === "wallet") loadSavedCards();
+      window.scrollTo({ top: 0 });
+    }
+
+    window.addEventListener("hashchange", showRoute);
+
+    for (const link of document.querySelectorAll("[data-to-booking]")) {
+      link.addEventListener("click", event => {
+        event.preventDefault();
+        history.pushState(null, "", "#/");
+        showRoute();
+        bookSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
 
     const checkInEl = document.getElementById("check-in");
     const checkOutEl = document.getElementById("check-out");
@@ -845,20 +911,23 @@
 
     function showLoggedOut() {
       sessionStorage.removeItem(USER_KEY);
-      navCta.textContent = "Client sign in";
+      navCta.hidden = false;
+      navLinks.hidden = navUserName.hidden = signoutButton.hidden = true;
       searchEl.hidden = true;
       loginEl.hidden = false;
       loginStatus.textContent = "";
       loadUsers();
+      showRoute();
     }
 
     function showLoggedIn(user) {
       greetingEl.textContent = `Welcome back, ${user.name}.`;
-      navCta.textContent = `Hi, ${user.name}`;
+      navUserName.textContent = user.name;
+      navCta.hidden = true;
+      navLinks.hidden = navUserName.hidden = signoutButton.hidden = false;
       loginEl.hidden = true;
       searchEl.hidden = false;
-      loadSavedCards();
-      loadBookings();
+      showRoute();
     }
 
     const bookingsListEl = document.getElementById("bookings-list");
