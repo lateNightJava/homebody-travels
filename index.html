@@ -408,6 +408,7 @@
     let selectedRoom = null;
     let roomsSearch = 0;
     let currentStay = null;
+    let checkoutSave = Promise.resolve();
     const POLL_MS = 1500;
     const CART_POLL_LIMIT = 40;
     const BOOKING_POLL_LIMIT = 120;
@@ -589,13 +590,13 @@
 
     function isExpiredCard(card) {
       const now = new Date();
-      return card.expire_year < now.getFullYear() || (card.expire_year === now.getFullYear() && card.expire_month < now.getMonth() + 1);
+      return card.expiry_year < now.getFullYear() || (card.expiry_year === now.getFullYear() && card.expiry_month < now.getMonth() + 1);
     }
 
     function cardLabel(card) {
-      const name = card.nickname || (card.card_logo || "card").toUpperCase();
-      const expiry = card.expire_month && card.expire_year ? ` · exp ${String(card.expire_month).padStart(2, "0")}/${card.expire_year}` : "";
-      return `${name} •••• ${card.last_4}${expiry}${isExpiredCard(card) ? " (expired)" : ""}`;
+      const name = card.nickname || (card.card_type || "card").toUpperCase();
+      const expiry = card.expiry_month && card.expiry_year ? ` · exp ${String(card.expiry_month).padStart(2, "0")}/${card.expiry_year}` : "";
+      return `${name} •••• ${card.last_four}${expiry}${isExpiredCard(card) ? " (expired)" : ""}`;
     }
 
     async function loadCards(selectId) {
@@ -620,11 +621,32 @@
         cardSelect.value = usable ? usable.id : NEW_CARD;
         bookNote.hidden = true;
         cardPicker.hidden = bookButton.hidden = false;
-        if (!usable) openCheckoutCard();
+        if (usable) saveCheckout(usable.id);
+        else openCheckoutCard();
       } catch (error) {
         bookNote.className = "status error";
         bookNote.textContent = error.message;
       }
+    }
+
+    function saveCheckout(cardId) {
+      const user = currentUser();
+      const room = selectedRoom;
+      checkoutSave = checkoutSave
+        .catch(() => {})
+        .then(() =>
+          workerJson(`/carts/${encodeURIComponent(room.cartId)}/checkout`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: user.id, card_id: cardId })
+          })
+        )
+        .then(checkout => {
+          room.version = checkout.version;
+          return checkout;
+        });
+      checkoutSave.catch(showBookNoteError);
+      return checkoutSave;
     }
 
     async function bookRoom() {
@@ -636,23 +658,18 @@
       selectionStatus.className = "status";
 
       try {
-        let cardId = cardSelect.value;
         if (usingNewCard) {
           selectionStatus.textContent = "Saving your card…";
           const saved = await saveCapturedCard(checkoutCapture, checkoutCardForm);
           closeCheckoutCard();
-          cardId = saved.id;
-          await Promise.all([loadCards(cardId), loadSavedCards()]);
+          await Promise.all([loadCards(saved.id), loadSavedCards()]);
         }
+        await checkoutSave;
         selectionStatus.textContent = "Booking your room…";
         const response = await fetch(`${WORKER_URL}/carts/${encodeURIComponent(selectedRoom.cartId)}/bookings`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: user.id,
-            card_id: cardId,
-            version: selectedRoom.version
-          })
+          body: JSON.stringify({ user_id: user.id, version: selectedRoom.version })
         });
         const booking = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(booking.fora?.error?.message || booking.error || `Couldn't book this room (${response.status}).`);
@@ -697,7 +714,11 @@
     }
 
     bookButton.addEventListener("click", bookRoom);
-    cardSelect.addEventListener("change", () => (cardSelect.value === NEW_CARD ? openCheckoutCard() : closeCheckoutCard()));
+    cardSelect.addEventListener("change", () => {
+      if (cardSelect.value === NEW_CARD) return openCheckoutCard();
+      closeCheckoutCard();
+      saveCheckout(cardSelect.value);
+    });
 
     function renderSelection(rate) {
       const refundableUntil = rate.cancellations.find(cancellation => cancellation.refundable)?.valid_until;

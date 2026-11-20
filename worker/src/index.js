@@ -17,6 +17,7 @@ const HOTEL_ROOMS_PATH = new RegExp(`^/hotels/(${UUID_PATTERN})/rooms$`);
 const CART_PATH = new RegExp(`^/carts/(${UUID_PATTERN})$`);
 const RATE_CHECK_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/rate-checks$`);
 const BOOKING_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/bookings$`);
+const CHECKOUT_PATH = new RegExp(`^/carts/(${UUID_PATTERN})/checkout$`);
 const USER_CARDS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards$`);
 const USER_CARD_PATH = new RegExp(`^/users/(${UUID_PATTERN})/cards/(${UUID_PATTERN})$`);
 const USER_BOOKINGS_PATH = new RegExp(`^/users/(${UUID_PATTERN})/bookings$`);
@@ -266,22 +267,12 @@ function foraResult(result, env, failure) {
   return json({ error: failure, fora: result.data }, result.status, env);
 }
 
-async function bookForaRoom(env, cartId, { cardId, version }, user) {
-  const checkout = await sendForaJson(env, "PATCH", `/carts/${cartId}/`, {
+function saveForaCheckout(env, cartId, cardId, user) {
+  return sendForaJson(env, "PATCH", `/carts/${cartId}/`, {
     contact_id: user.fora_client_id,
     card_id: cardId,
     email: user.email
   });
-  if (!checkout.ok) return checkout;
-  if (checkout.data.version !== version + 1) {
-    return {
-      status: 409,
-      ok: false,
-      data: { error: { message: "This room changed since you checked it. Select it again to see the latest price." } }
-    };
-  }
-
-  return postForaJson(env, `/carts/${cartId}/bookings/`, { version: checkout.data.version });
 }
 
 async function fetchForaBookingStatus(env, bookingId) {
@@ -493,21 +484,41 @@ export default {
       }
     }
 
-    const bookingMatch = pathname.match(BOOKING_PATH);
-    if (request.method === "POST" && bookingMatch) {
+    const checkoutMatch = pathname.match(CHECKOUT_PATH);
+    if (request.method === "POST" && checkoutMatch) {
       const body = await request.json().catch(() => null);
       const userId = typeof body?.user_id === "string" ? body.user_id : "";
       const cardId = typeof body?.card_id === "string" ? body.card_id : "";
-      const version = Number(body?.version);
-      if (!userId || !Number.isInteger(version) || version < 1) {
-        return json({ error: "Choose a room and log in first." }, 400, env);
-      }
+      if (!userId) return json({ error: "Log in first." }, 400, env);
       if (!CARD_ID_PATTERN.test(cardId)) return json({ error: "Choose a card." }, 400, env);
       const user = await env.USERS.get(`${USER_KEY_PREFIX}${userId}`, "json");
       if (!user?.fora_client_id) return json({ error: "Log in again to book." }, 400, env);
 
       try {
-        const result = await bookForaRoom(env, bookingMatch[1], { cardId, version }, user);
+        return foraResult(
+          await saveForaCheckout(env, checkoutMatch[1], cardId, user),
+          env,
+          "We couldn't save your checkout details."
+        );
+      } catch (err) {
+        console.error(err);
+        return json({ error: "We couldn't save your checkout details." }, 502, env);
+      }
+    }
+
+    const bookingMatch = pathname.match(BOOKING_PATH);
+    if (request.method === "POST" && bookingMatch) {
+      const body = await request.json().catch(() => null);
+      const userId = typeof body?.user_id === "string" ? body.user_id : "";
+      const version = Number(body?.version);
+      if (!userId || !Number.isInteger(version) || version < 1) {
+        return json({ error: "Choose a room and log in first." }, 400, env);
+      }
+      const user = await env.USERS.get(`${USER_KEY_PREFIX}${userId}`, "json");
+      if (!user) return json({ error: "Log in again to book." }, 400, env);
+
+      try {
+        const result = await postForaJson(env, `/carts/${bookingMatch[1]}/bookings/`, { version });
         if (result.ok) await rememberBooking(env, user, result.data);
         return foraResult(result, env, "We couldn't book this room.");
       } catch (err) {
